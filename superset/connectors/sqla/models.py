@@ -104,6 +104,7 @@ from superset.models.helpers import (
     SoftDeleteMixin,
     SQLA_QUERY_KEYS,
     validate_adhoc_subquery,
+    validate_rendered_expression,
 )
 from superset.models.slice import Slice
 from superset.models.sql_types.base import CurrencyType
@@ -1200,6 +1201,14 @@ class TableColumn(AuditMixinNullable, ImportExportMixin, CertificationMixin, Mod
                             msg=msg,
                         )
                     ) from ex
+                if expression != self.expression:
+                    # Re-check the rendered expression before embedding it.
+                    expression = validate_rendered_expression(
+                        expression,
+                        self.database,
+                        self.table.catalog if self.table else None,
+                        self.table.schema if self.table else None,
+                    )
             col = literal_column(expression, type_=type_)
         else:
             col = column(self.column_name, type_=type_)
@@ -1247,6 +1256,14 @@ class TableColumn(AuditMixinNullable, ImportExportMixin, CertificationMixin, Mod
                             msg=msg,
                         )
                     ) from ex
+                if expression != self.expression:
+                    # Re-check the rendered expression before embedding it.
+                    expression = validate_rendered_expression(
+                        expression,
+                        self.database,
+                        self.table.catalog if self.table else None,
+                        self.table.schema if self.table else None,
+                    )
             col = literal_column(expression, type_=type_)
         else:
             col = column(self.column_name, type_=type_)
@@ -1342,6 +1359,14 @@ class SqlMetric(AuditMixinNullable, ImportExportMixin, CertificationMixin, Model
                         msg=msg,
                     )
                 ) from ex
+            if expression != self.expression:
+                # Re-check the rendered expression before embedding it.
+                expression = validate_rendered_expression(
+                    expression,
+                    self.table.database,
+                    self.table.catalog,
+                    self.table.schema,
+                )
 
         sqla_col: ColumnClause = literal_column(expression)
         return self.table.database.make_sqla_column_compatible(sqla_col, label)

@@ -181,6 +181,10 @@ def collect_rls_predicates_for_sql(
             }
         )
     except Exception:
-        # If we can't parse the SQL, return empty list
-        # This ensures RLS application failure doesn't break caching
-        return []
+        # The applicable predicates could not be determined (e.g. the SQL
+        # could not be parsed); scope the cache key to the current user.
+        from superset.utils.core import (
+            get_user_id,  # pylint: disable=import-outside-toplevel
+        )
+
+        return [f"rls-predicates-unresolved:{get_user_id()}"]
