@@ -835,7 +835,16 @@ def test_none_operand_in_filter(login_as_admin, physical_dataset):
             '{{ user_email }}' as email,
             '{{ current_user_roles()|tojson }}' as roles
             """,
-            {1, "abc", "abc@test.com", '["role1", "role2"]'},
+            # The `{% set %}` statement makes the raw dataset SQL unparseable,
+            # so RLS predicates can't be resolved and the cache key falls back
+            # to the current user (None in this unauthenticated test context).
+            {
+                1,
+                "abc",
+                "abc@test.com",
+                '["role1", "role2"]',
+                "rls-predicates-unresolved:None",
+            },
             True,
         ),
         (
@@ -845,7 +854,10 @@ def test_none_operand_in_filter(login_as_admin, physical_dataset):
             SELECT
             '{{ user_conditional_id }}' as conditional
             """,
-            {1, "abc@test.com"},
+            # The `{% set %}` statement makes the raw dataset SQL unparseable,
+            # so RLS predicates can't be resolved and the cache key falls back
+            # to the current user (None in this unauthenticated test context).
+            {1, "abc@test.com", "rls-predicates-unresolved:None"},
             True,
         ),
         (
