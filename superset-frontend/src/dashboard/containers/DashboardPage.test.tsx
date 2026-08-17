@@ -18,14 +18,19 @@
  */
 import type { ReactNode } from 'react';
 import { Suspense } from 'react';
-import { render, screen, waitFor } from 'spec/helpers/testing-library';
+import { act, render, screen, waitFor } from 'spec/helpers/testing-library';
 import {
   useDashboard,
   useDashboardCharts,
   useDashboardDatasets,
 } from 'src/hooks/apiResources';
-import { SupersetClient } from '@superset-ui/core';
+import { FeatureFlag, SupersetClient } from '@superset-ui/core';
 import CrudThemeProvider from 'src/components/CrudThemeProvider';
+import { hydrateDashboard } from 'src/dashboard/actions/hydrate';
+import { getPermalinkValue } from 'src/dashboard/components/nativeFilters/FilterBar/keyValue';
+import { getUrlParam } from 'src/utils/urlUtils';
+import { TAB_TYPE } from 'src/dashboard/util/componentTypes';
+import { URL_PARAMS } from 'src/constants';
 import DashboardPage from './DashboardPage';
 
 const mockTheme = {
@@ -83,7 +88,7 @@ jest.mock('src/components/CrudThemeProvider', () => ({
 
 jest.mock('src/dashboard/components/DashboardBuilder/DashboardBuilder', () => ({
   __esModule: true,
-  default: () => <div data-testid="dashboard-builder">DashboardBuilder</div>,
+  default: () => <div data-test="dashboard-builder">DashboardBuilder</div>,
 }));
 
 jest.mock('src/dashboard/components/SyncDashboardState', () => ({
@@ -116,7 +121,7 @@ jest.mock('src/dashboard/util/activeDashboardFilters', () => ({
 }));
 
 jest.mock('src/utils/urlUtils', () => ({
-  getUrlParam: () => null,
+  getUrlParam: jest.fn(),
 }));
 
 jest.mock('src/dashboard/components/nativeFilters/FilterBar/keyValue', () => ({
@@ -134,13 +139,19 @@ const mockUseDashboard = useDashboard as jest.Mock;
 const mockUseDashboardCharts = useDashboardCharts as jest.Mock;
 const mockUseDashboardDatasets = useDashboardDatasets as jest.Mock;
 const MockCrudThemeProvider = CrudThemeProvider as unknown as jest.Mock;
+const mockHydrateDashboard = hydrateDashboard as jest.Mock;
+const mockGetPermalinkValue = getPermalinkValue as jest.Mock;
+const mockGetUrlParam = getUrlParam as jest.Mock;
 
 afterEach(() => {
   jest.restoreAllMocks();
+  window.featureFlags = {};
 });
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockGetUrlParam.mockReturnValue(null);
+  mockGetPermalinkValue.mockResolvedValue(null);
   mockUseDashboard.mockReturnValue({
     result: mockDashboard,
     error: null,
@@ -253,4 +264,180 @@ test('passes null theme when Redux dashboardInfo.theme is explicitly null (theme
     expect.objectContaining({ theme: null }),
     expect.anything(),
   );
+});
+
+test('waits for sanitized permalink hydration before rendering dashboard charts', async () => {
+  window.featureFlags = {
+    [FeatureFlag.DashboardCrossFilterPermalink]: true,
+  };
+  mockGetUrlParam.mockImplementation(param => {
+    if (param.name === URL_PARAMS.permalinkKey.name) {
+      return 'permalink-key';
+    }
+    if (param.name === URL_PARAMS.nativeFilters.name) {
+      return { 999: { ownState: { bypassedSanitizer: true } } };
+    }
+    return null;
+  });
+  let resolvePermalink: (value: {
+    dashboardId: string;
+    state: {
+      dataMask: Record<string, object>;
+      activeTabs: string[];
+      chartStates: Record<string, object>;
+    };
+  }) => void = () => {};
+  mockGetPermalinkValue.mockReturnValue(
+    new Promise(resolve => {
+      resolvePermalink = resolve;
+    }),
+  );
+  mockUseDashboard.mockReturnValue({
+    result: {
+      ...mockDashboard,
+      metadata: {
+        native_filter_configuration: [],
+        chart_configuration: { 10: {} },
+      },
+      position_data: {
+        'TAB-valid': { id: 'TAB-valid', type: TAB_TYPE },
+        'CHART-10': {
+          id: 'CHART-10',
+          type: 'CHART',
+          meta: { chartId: 10 },
+        },
+      },
+    },
+    error: null,
+  });
+  mockUseDashboardCharts.mockReturnValue({
+    result: [
+      {
+        id: 10,
+        form_data: {
+          slice_id: 10,
+          viz_type: 'table',
+          groupby: ['quantity'],
+          metrics: ['gross_revenue'],
+          conditional_formatting: [
+            {
+              ruleId: '772a548e-72f7-4ac8-a8ff-fdb7465b3ccd',
+              subjectRef: { kind: 'saved_metric', key: 'gross_revenue' },
+              alertLevel: 'RED',
+              filterable: true,
+              column: 'gross_revenue',
+              operator: '<',
+              targetValue: 0,
+              useGradient: false,
+            },
+          ],
+        },
+      },
+    ],
+    error: null,
+  });
+
+  render(
+    <Suspense fallback="loading">
+      <DashboardPage idOrSlug="1" />
+    </Suspense>,
+    {
+      useRedux: true,
+      useRouter: true,
+      initialState: {
+        dashboardInfo: { id: 999, metadata: {} },
+        dashboardState: { sliceIds: [999] },
+        nativeFilters: { filters: {} },
+        dataMask: {},
+      },
+    },
+  );
+
+  expect(mockHydrateDashboard).not.toHaveBeenCalled();
+  expect(screen.queryByTestId('dashboard-builder')).not.toBeInTheDocument();
+
+  await act(async () => {
+    resolvePermalink({
+      dashboardId: '1',
+      state: {
+        dataMask: {
+          10: {
+            id: '10',
+            ownState: {
+              currentPage: 4,
+              alertFilters: [
+                {
+                  ruleId: '772a548e-72f7-4ac8-a8ff-fdb7465b3ccd',
+                  level: 'RED',
+                },
+              ],
+            },
+          },
+          999: { id: '999', ownState: { deletedChartState: true } },
+        },
+        activeTabs: ['TAB-valid', 'TAB-deleted'],
+        chartStates: { 10: { rows: ['must-not-be-restored'] } },
+      },
+    });
+  });
+
+  await waitFor(() => expect(mockHydrateDashboard).toHaveBeenCalledTimes(1));
+  expect(mockHydrateDashboard).toHaveBeenCalledWith(
+    expect.objectContaining({
+      activeTabs: ['TAB-valid'],
+      chartStates: {},
+      dataMask: {
+        10: {
+          id: '10',
+          ownState: {
+            alertFilters: [
+              {
+                ruleId: '772a548e-72f7-4ac8-a8ff-fdb7465b3ccd',
+                level: 'RED',
+              },
+            ],
+          },
+        },
+      },
+      restorePermalinkDataMask: true,
+    }),
+  );
+  expect(await screen.findByTestId('dashboard-builder')).toBeInTheDocument();
+});
+
+test('continues with empty validated state when permalink loading fails', async () => {
+  window.featureFlags = {
+    [FeatureFlag.DashboardCrossFilterPermalink]: true,
+  };
+  mockGetUrlParam.mockImplementation(param =>
+    param.name === URL_PARAMS.permalinkKey.name ? 'missing-key' : null,
+  );
+  mockGetPermalinkValue.mockRejectedValue(new Error('request failed'));
+
+  render(
+    <Suspense fallback="loading">
+      <DashboardPage idOrSlug="1" />
+    </Suspense>,
+    {
+      useRedux: true,
+      useRouter: true,
+      initialState: {
+        dashboardInfo: { id: 999, metadata: {} },
+        dashboardState: { sliceIds: [] },
+        nativeFilters: { filters: {} },
+        dataMask: {},
+      },
+    },
+  );
+
+  await waitFor(() => expect(mockHydrateDashboard).toHaveBeenCalledTimes(1));
+  expect(mockHydrateDashboard).toHaveBeenCalledWith(
+    expect.objectContaining({
+      activeTabs: null,
+      chartStates: null,
+      dataMask: {},
+      restorePermalinkDataMask: true,
+    }),
+  );
+  expect(await screen.findByTestId('dashboard-builder')).toBeInTheDocument();
 });

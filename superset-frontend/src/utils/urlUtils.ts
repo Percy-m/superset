@@ -17,7 +17,9 @@
  * under the License.
  */
 import {
+  FeatureFlag,
   isDefined,
+  isFeatureEnabled,
   JsonObject,
   QueryFormData,
   SupersetClient,
@@ -252,15 +254,25 @@ export async function getDashboardPermalink({
    */
   includeChartState?: boolean;
 }): Promise<PermalinkResult> {
-  const payload: JsonObject = {
-    urlParams: getDashboardUrlParams(),
-    dataMask,
-    activeTabs,
-    anchor,
-  };
+  const shareableStateEnabled = isFeatureEnabled(
+    FeatureFlag.DashboardCrossFilterPermalink,
+  );
+  const payload: JsonObject = shareableStateEnabled
+    ? { dataMask, activeTabs, anchor }
+    : {
+        urlParams: getDashboardUrlParams(),
+        dataMask,
+        activeTabs,
+        anchor,
+      };
 
   // Only include chart states when explicitly requested AND when they exist
-  if (includeChartState && chartStates && Object.keys(chartStates).length > 0) {
+  if (
+    !shareableStateEnabled &&
+    includeChartState &&
+    chartStates &&
+    Object.keys(chartStates).length > 0
+  ) {
     payload.chartStates = chartStates;
   }
 

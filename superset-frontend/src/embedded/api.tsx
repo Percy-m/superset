@@ -16,13 +16,22 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { DataMaskStateWithId, JsonObject } from '@superset-ui/core';
+import {
+  DataMaskStateWithId,
+  FeatureFlag,
+  isFeatureEnabled,
+  JsonObject,
+} from '@superset-ui/core';
 import getBootstrapData from 'src/utils/getBootstrapData';
 import { store } from '../views/store';
 import { getDashboardPermalink as getDashboardPermalinkUtil } from '../utils/urlUtils';
 import { DashboardChartStates } from '../dashboard/types/chartState';
 import { hasStatefulCharts } from '../dashboard/util/chartStateConverter';
 import { getChartDataPayloads as getChartDataPayloadsUtil } from './utils';
+import {
+  logDashboardStateDrops,
+  sanitizeShareableDashboardState,
+} from '../dashboard/permalink/sanitizeShareableState';
 
 const bootstrapData = getBootstrapData();
 
@@ -53,25 +62,58 @@ const getDashboardPermalink = async ({
   anchor: string;
 }): Promise<string> => {
   const state = store?.getState();
-  const { dashboardId, dataMask, activeTabs, chartStates, sliceEntities } = {
+  const {
+    dashboardId,
+    dataMask,
+    activeTabs,
+    chartStates,
+    sliceEntities,
+    nativeFilterConfiguration,
+    chartConfiguration,
+    crossFiltersEnabled,
+    dashboardLayout,
+  } = {
     dashboardId:
       state?.dashboardInfo?.id || bootstrapData?.embedded!.dashboard_id,
     dataMask: state?.dataMask,
     activeTabs: state.dashboardState?.activeTabs,
     chartStates: state.dashboardState?.chartStates,
     sliceEntities: state?.sliceEntities?.slices,
+    nativeFilterConfiguration: state?.nativeFilters?.filters,
+    chartConfiguration: state?.dashboardInfo?.metadata?.chart_configuration,
+    crossFiltersEnabled: state?.dashboardInfo?.crossFiltersEnabled,
+    dashboardLayout: state?.dashboardLayout?.present,
   };
 
+  const shareableStateEnabled = isFeatureEnabled(
+    FeatureFlag.DashboardCrossFilterPermalink,
+  );
+  const sanitized = shareableStateEnabled
+    ? sanitizeShareableDashboardState({
+        dataMask,
+        activeTabs,
+        anchor,
+        nativeFilterConfiguration,
+        charts: sliceEntities,
+        chartConfiguration,
+        crossFiltersEnabled,
+        layout: dashboardLayout,
+      })
+    : undefined;
+  if (sanitized) {
+    logDashboardStateDrops('save', sanitized.dropped);
+  }
   const includeChartState =
+    !shareableStateEnabled &&
     hasStatefulCharts(sliceEntities) &&
     chartStates &&
     Object.keys(chartStates).length > 0;
 
   const { url } = await getDashboardPermalinkUtil({
     dashboardId,
-    dataMask,
-    activeTabs,
-    anchor,
+    dataMask: sanitized?.state.dataMask ?? dataMask,
+    activeTabs: sanitized?.state.activeTabs ?? activeTabs,
+    anchor: sanitized?.anchor ?? (shareableStateEnabled ? undefined : anchor),
     chartStates: includeChartState ? chartStates : undefined,
     includeChartState,
   });

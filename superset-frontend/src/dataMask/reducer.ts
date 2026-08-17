@@ -30,6 +30,8 @@ import {
   FilterState,
   ExtraFormData,
   ChartCustomization,
+  FeatureFlag,
+  isFeatureEnabled,
 } from '@superset-ui/core';
 import {
   NATIVE_FILTER_PREFIX,
@@ -73,6 +75,7 @@ interface HydrateDashboardAction {
       metadata: DashboardMetadata;
     };
     dataMask?: DataMaskStateWithId;
+    restorePermalinkDataMask?: boolean;
   };
 }
 
@@ -106,6 +109,7 @@ function fillNativeFilters(
   draftDataMask: DataMaskStateWithId,
   initialDataMask?: DataMaskStateWithId,
   currentFilters?: Filters,
+  preserveNonNativeFilters = true,
 ) {
   filterConfig.forEach((filter: Filter) => {
     const dataMask = initialDataMask || {};
@@ -129,12 +133,14 @@ function fillNativeFilters(
     }
   });
 
-  // Get back all other non-native filters
-  Object.values(draftDataMask).forEach(filter => {
-    if (!String(filter?.id).startsWith(NATIVE_FILTER_PREFIX)) {
-      mergedDataMask[filter?.id] = filter;
-    }
-  });
+  if (preserveNonNativeFilters) {
+    // Get back all other non-native filters
+    Object.values(draftDataMask).forEach(filter => {
+      if (!String(filter?.id).startsWith(NATIVE_FILTER_PREFIX)) {
+        mergedDataMask[filter?.id] = filter;
+      }
+    });
+  }
 }
 
 function updateDataMaskForFilterChanges(
@@ -216,10 +222,14 @@ const dataMaskReducer = produce(
         const hydrateDashboardAction = action as HydrateDashboardAction;
         const metadata = hydrateDashboardAction.data.dashboardInfo?.metadata;
         const loadedDataMask = hydrateDashboardAction.data.dataMask;
+        const restorePermalinkDataMask =
+          hydrateDashboardAction.data.restorePermalinkDataMask === true &&
+          isFeatureEnabled(FeatureFlag.DashboardCrossFilterPermalink);
 
         Object.keys(metadata?.chart_configuration || {}).forEach(id => {
           cleanState[id] = {
             ...(getInitialDataMask(id) as DataMaskWithId),
+            ...(restorePermalinkDataMask ? loadedDataMask?.[id] : {}),
           };
         });
 
@@ -228,6 +238,8 @@ const dataMaskReducer = produce(
           cleanState,
           draft,
           loadedDataMask,
+          undefined,
+          !restorePermalinkDataMask,
         );
 
         const rawChartCustomizationConfig =
@@ -278,15 +290,17 @@ const dataMaskReducer = produce(
           }
         });
 
-        Object.values(draft).forEach(filter => {
-          if (
-            filter?.id &&
-            !isChartCustomization(String(filter.id)) &&
-            !cleanState[filter.id]
-          ) {
-            cleanState[filter.id] = filter;
-          }
-        });
+        if (!restorePermalinkDataMask) {
+          Object.values(draft).forEach(filter => {
+            if (
+              filter?.id &&
+              !isChartCustomization(String(filter.id)) &&
+              !cleanState[filter.id]
+            ) {
+              cleanState[filter.id] = filter;
+            }
+          });
+        }
 
         return cleanState;
       }

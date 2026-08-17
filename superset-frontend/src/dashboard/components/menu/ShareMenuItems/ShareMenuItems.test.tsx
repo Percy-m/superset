@@ -27,6 +27,8 @@ import {
 import * as copyTextToClipboard from 'src/utils/copy';
 import fetchMock from 'fetch-mock';
 import { ComponentProps } from 'react';
+import { FeatureFlag } from '@superset-ui/core';
+import { TAB_TYPE } from 'src/dashboard/util/componentTypes';
 import { useShareMenuItems, ShareMenuItemProps } from '.';
 
 const spy = jest.spyOn(copyTextToClipboard, 'default');
@@ -117,10 +119,134 @@ test('Click on "Copy dashboard URL" and succeed', async () => {
     expect(spy).toHaveBeenCalledTimes(1);
     const value = await spy.mock.calls[0][0]();
     expect(value).toBe('http://localhost/superset/dashboard/p/123/');
+    const body = JSON.parse(
+      fetchMock.callHistory.calls(postDashboardPermalinkMockUrl)[0].options
+        .body as string,
+    );
+    expect(body).toHaveProperty('urlParams');
     expect(props.addSuccessToast).toHaveBeenCalledTimes(1);
     expect(props.addSuccessToast).toHaveBeenCalledWith('Copied to clipboard!');
     expect(props.addDangerToast).toHaveBeenCalledTimes(0);
   });
+});
+
+test('enabled permalink sharing posts only sanitized dashboard state', async () => {
+  window.featureFlags = {
+    [FeatureFlag.DashboardCrossFilterPermalink]: true,
+  };
+  spy.mockResolvedValue(undefined);
+  render(
+    <MenuWrapper
+      onClick={jest.fn()}
+      selectable={false}
+      data-test="main-menu"
+      forceSubMenuRender
+      shareProps={createProps()}
+    />,
+    {
+      useRedux: true,
+      initialState: {
+        dataMask: {
+          10: {
+            id: '10',
+            ownState: {
+              currentPage: 7,
+              searchText: 'must-not-be-shared',
+              alertFilters: [
+                {
+                  ruleId: '772a548e-72f7-4ac8-a8ff-fdb7465b3ccd',
+                  level: 'RED',
+                },
+              ],
+            },
+          },
+        },
+        dashboardState: {
+          activeTabs: ['TAB-valid', 'TAB-deleted'],
+          chartStates: { 10: { state: { rows: ['must-not-be-shared'] } } },
+          sliceIds: [10],
+        },
+        dashboardInfo: {
+          crossFiltersEnabled: true,
+          metadata: { chart_configuration: { 10: {} } },
+        },
+        sliceEntities: {
+          slices: {
+            10: {
+              slice_id: 10,
+              form_data: {
+                slice_id: 10,
+                viz_type: 'table',
+                groupby: ['quantity'],
+                metrics: ['gross_revenue'],
+                conditional_formatting: [
+                  {
+                    ruleId: '772a548e-72f7-4ac8-a8ff-fdb7465b3ccd',
+                    subjectRef: {
+                      kind: 'saved_metric',
+                      key: 'gross_revenue',
+                    },
+                    alertLevel: 'RED',
+                    filterable: true,
+                    column: 'gross_revenue',
+                    operator: '<',
+                    targetValue: 0,
+                    useGradient: false,
+                  },
+                ],
+              },
+            },
+          },
+        },
+        nativeFilters: { filters: {} },
+        dashboardLayout: {
+          present: {
+            'TAB-valid': { id: 'TAB-valid', type: TAB_TYPE },
+            'CHART-10': {
+              id: 'CHART-10',
+              type: 'CHART',
+              meta: { chartId: 10 },
+            },
+          },
+          past: [],
+          future: [],
+        },
+      },
+    },
+  );
+
+  await userEvent.click(screen.getByText('Copy dashboard URL'));
+  await waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+  await spy.mock.calls[0][0]();
+  await waitFor(() =>
+    expect(
+      fetchMock.callHistory.calls(postDashboardPermalinkMockUrl),
+    ).toHaveLength(1),
+  );
+  const body = JSON.parse(
+    fetchMock.callHistory.calls(postDashboardPermalinkMockUrl)[0].options
+      .body as string,
+  );
+
+  expect(body).toEqual({
+    activeTabs: ['TAB-valid'],
+    dataMask: {
+      10: {
+        id: '10',
+        ownState: {
+          alertFilters: [
+            {
+              ruleId: '772a548e-72f7-4ac8-a8ff-fdb7465b3ccd',
+              level: 'RED',
+            },
+          ],
+        },
+      },
+    },
+  });
+  expect(JSON.stringify(body)).not.toContain('must-not-be-shared');
+  expect(body).not.toHaveProperty('chartStates');
+  expect(body).not.toHaveProperty('urlParams');
 });
 
 test('Click on "Copy dashboard URL" and fail', async () => {

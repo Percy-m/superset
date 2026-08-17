@@ -32,6 +32,10 @@ import { ModalTrigger } from '@superset-ui/core/components';
 import { MenuKeys, RootState } from 'src/dashboard/types';
 import { shallowEqual, useSelector } from 'react-redux';
 import { hasStatefulCharts } from 'src/dashboard/util/chartStateConverter';
+import {
+  logDashboardStateDrops,
+  sanitizeShareableDashboardState,
+} from 'src/dashboard/permalink/sanitizeShareableState';
 
 export interface ShareMenuItemProps extends ComponentProps<
   typeof Menu.SubMenu
@@ -77,28 +81,62 @@ export const useShareMenuItems = (props: ShareMenuItemProps): MenuItem => {
   );
   const isEmbedCodeEnabled = isFeatureEnabled(FeatureFlag.EmbeddableCharts);
 
-  const { dataMask, activeTabs, chartStates, sliceEntities } = useSelector(
+  const {
+    dataMask,
+    activeTabs,
+    chartStates,
+    sliceEntities,
+    nativeFilterConfiguration,
+    chartConfiguration,
+    crossFiltersEnabled,
+    dashboardLayout,
+  } = useSelector(
     (state: RootState) => ({
       dataMask: state.dataMask,
       activeTabs: state.dashboardState.activeTabs,
       chartStates: state.dashboardState.chartStates,
       sliceEntities: state.sliceEntities?.slices,
+      nativeFilterConfiguration: state.nativeFilters.filters,
+      chartConfiguration: state.dashboardInfo.metadata?.chart_configuration,
+      crossFiltersEnabled: state.dashboardInfo.crossFiltersEnabled,
+      dashboardLayout: state.dashboardLayout.present,
     }),
     shallowEqual,
   );
 
   async function generateUrl() {
+    const shareableStateEnabled = isFeatureEnabled(
+      FeatureFlag.DashboardCrossFilterPermalink,
+    );
+    const sanitized = shareableStateEnabled
+      ? sanitizeShareableDashboardState({
+          dataMask,
+          activeTabs,
+          anchor: dashboardComponentId,
+          nativeFilterConfiguration,
+          charts: sliceEntities,
+          chartConfiguration,
+          crossFiltersEnabled,
+          layout: dashboardLayout,
+        })
+      : undefined;
+    if (sanitized) {
+      logDashboardStateDrops('save', sanitized.dropped);
+    }
     // Only include chart state for AG Grid tables
     const includeChartState =
+      !shareableStateEnabled &&
       hasStatefulCharts(sliceEntities) &&
       chartStates &&
       Object.keys(chartStates).length > 0;
 
     const result = await getDashboardPermalink({
       dashboardId,
-      dataMask,
-      activeTabs,
-      anchor: dashboardComponentId,
+      dataMask: sanitized?.state.dataMask ?? dataMask,
+      activeTabs: sanitized?.state.activeTabs ?? activeTabs,
+      anchor:
+        sanitized?.anchor ??
+        (shareableStateEnabled ? undefined : dashboardComponentId),
       chartStates: includeChartState ? chartStates : undefined,
       includeChartState,
     });

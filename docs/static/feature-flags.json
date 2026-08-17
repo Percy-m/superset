@@ -28,6 +28,12 @@
         "description": "Experimental PyArrow engine for CSV parsing (may have issues with dates/nulls)"
       },
       {
+        "name": "DASHBOARD_CROSS_FILTER_PERMALINK",
+        "default": false,
+        "lifecycle": "development",
+        "description": "Enables sanitized cross-filter and Table alert state in dashboard permalinks"
+      },
+      {
         "name": "DATASET_FOLDERS",
         "default": false,
         "lifecycle": "development",

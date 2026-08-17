@@ -24,10 +24,12 @@ import {
 } from './actions';
 import {
   type DataMaskStateWithId,
+  FeatureFlag,
   type Filter,
   type NativeFilterTarget,
   NativeFilterType,
 } from '@superset-ui/core';
+import { HYDRATE_DASHBOARD } from 'src/dashboard/actions/hydrate';
 
 // Helper to create minimal filter for testing
 const createFilter = (
@@ -62,6 +64,49 @@ const createModifyAction = (
     modified: [modifiedFilter],
   },
   filters: oldFilters,
+});
+
+const createHydrateAction = () =>
+  ({
+    type: HYDRATE_DASHBOARD,
+    data: {
+      dashboardInfo: {
+        metadata: {
+          chart_configuration: { 10: {} },
+          native_filter_configuration: [createFilter('NATIVE_FILTER-1')],
+          chart_customization_config: [],
+        },
+      },
+      restorePermalinkDataMask: true,
+      dataMask: {
+        'NATIVE_FILTER-1': {
+          id: 'NATIVE_FILTER-1',
+          extraFormData: {
+            filters: [{ col: 'region', op: 'IN', val: ['APAC'] }],
+          },
+          filterState: { value: ['APAC'] },
+        },
+        10: {
+          id: '10',
+          extraFormData: {
+            filters: [{ col: 'channel', op: 'IN', val: ['Online'] }],
+          },
+          filterState: { value: ['Online'] },
+          ownState: {
+            alertFilters: [
+              {
+                ruleId: '772a548e-72f7-4ac8-a8ff-fdb7465b3ccd',
+                level: 'RED',
+              },
+            ],
+          },
+        },
+      },
+    },
+  }) as Parameters<typeof reducer>[1];
+
+afterEach(() => {
+  window.featureFlags = {};
 });
 
 test('when user edits a filter and changes targets, other filters maintain their selected values', () => {
@@ -115,4 +160,52 @@ test('when user edits a filter without changing targets, their selection is pres
   expect(result['NATIVE_FILTER-1']?.extraFormData?.time_range).toEqual(
     '1 year ago',
   );
+});
+
+test('permalink hydration restores valid chart-ID data masks when enabled', () => {
+  window.featureFlags = {
+    [FeatureFlag.DashboardCrossFilterPermalink]: true,
+  };
+  const initialState: DataMaskStateWithId = {
+    999: {
+      id: '999',
+      ownState: { staleState: true },
+    },
+  };
+
+  const result = reducer(initialState, createHydrateAction());
+
+  expect(result['NATIVE_FILTER-1']?.filterState?.value).toEqual(['APAC']);
+  expect(result['10']).toEqual(
+    expect.objectContaining({
+      id: '10',
+      filterState: { value: ['Online'] },
+      ownState: {
+        alertFilters: [
+          {
+            ruleId: '772a548e-72f7-4ac8-a8ff-fdb7465b3ccd',
+            level: 'RED',
+          },
+        ],
+      },
+    }),
+  );
+  expect(result['999']).toBeUndefined();
+});
+
+test('permalink chart-ID hydration keeps legacy behavior when disabled', () => {
+  window.featureFlags = {
+    [FeatureFlag.DashboardCrossFilterPermalink]: false,
+  };
+  const initialState: DataMaskStateWithId = {
+    999: {
+      id: '999',
+      ownState: { legacyState: true },
+    },
+  };
+
+  const result = reducer(initialState, createHydrateAction());
+
+  expect(result['10']?.ownState).toEqual({});
+  expect(result['999']?.ownState).toEqual({ legacyState: true });
 });

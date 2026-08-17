@@ -33,6 +33,7 @@ export enum FeatureFlag {
   ChartPluginsExperimental = 'CHART_PLUGINS_EXPERIMENTAL',
   ConfirmDashboardDiff = 'CONFIRM_DASHBOARD_DIFF',
   CssTemplates = 'CSS_TEMPLATES',
+  DashboardCrossFilterPermalink = 'DASHBOARD_CROSS_FILTER_PERMALINK',
   DashboardVirtualization = 'DASHBOARD_VIRTUALIZATION',
   DashboardVirtualizationDeferData = 'DASHBOARD_VIRTUALIZATION_DEFER_DATA',
   DashboardRbac = 'DASHBOARD_RBAC',

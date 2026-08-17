@@ -16,15 +16,25 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { createContext, lazy, FC, useEffect, useMemo, useRef } from 'react';
+import {
+  createContext,
+  lazy,
+  FC,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { Global } from '@emotion/react';
 import { useHistory } from 'react-router-dom';
 import { t } from '@apache-superset/core/translation';
 import { useTheme } from '@apache-superset/core/theme';
+import { logging } from '@apache-superset/core/utils';
 import { useDispatch, useSelector } from 'react-redux';
 import { createSelector } from '@reduxjs/toolkit';
 import { useToasts } from 'src/components/MessageToasts/withToasts';
 import { Loading } from '@superset-ui/core/components';
+import { FeatureFlag, isFeatureEnabled } from '@superset-ui/core';
 import {
   useDashboard,
   useDashboardCharts,
@@ -64,6 +74,10 @@ import SyncDashboardState, {
   getDashboardContextLocalStorage,
 } from '../components/SyncDashboardState';
 import { AutoRefreshProvider } from '../contexts/AutoRefreshContext';
+import {
+  logDashboardStateDrops,
+  sanitizeShareableDashboardState,
+} from '../permalink/sanitizeShareableState';
 
 export const DashboardPageIdContext = createContext('');
 
@@ -134,6 +148,9 @@ export const DashboardPage: FC<PageProps> = ({ idOrSlug }: PageProps) => {
     status,
   } = useDashboardDatasets(idOrSlug);
   const isDashboardHydrated = useRef(false);
+  const [hydratedPageKey, setHydratedPageKey] = useState<
+    string | number | null
+  >(null);
 
   const error = dashboardApiError || chartsApiError;
   const readyToRender = Boolean(dashboard && charts);
@@ -168,11 +185,21 @@ export const DashboardPage: FC<PageProps> = ({ idOrSlug }: PageProps) => {
   }, [dispatch, status]);
 
   useEffect(() => {
-    // eslint-disable-next-line consistent-return
-    async function getDataMaskApplied() {
+    isDashboardHydrated.current = false;
+    setHydratedPageKey(null);
+  }, [idOrSlug]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let hydrationCompleted = false;
+    async function hydrateWithUrlState() {
       const permalinkKey = getUrlParam(URL_PARAMS.permalinkKey);
       const nativeFilterKeyValue = getUrlParam(URL_PARAMS.nativeFiltersKey);
       const isOldRison = getUrlParam(URL_PARAMS.nativeFilters);
+      const restorePermalinkDataMask = Boolean(
+        permalinkKey &&
+        isFeatureEnabled(FeatureFlag.DashboardCrossFilterPermalink),
+      );
 
       let dataMask = nativeFilterKeyValue || {};
       // activeTabs is initialized with undefined so that it doesn't override
@@ -180,25 +207,55 @@ export const DashboardPage: FC<PageProps> = ({ idOrSlug }: PageProps) => {
       let activeTabs: string[] | null | undefined;
       let chartStates: DashboardChartStates | null | undefined;
       let anchor: string | undefined;
-      if (permalinkKey) {
-        const permalinkValue = await getPermalinkValue(permalinkKey);
-        if (permalinkValue?.state) {
-          ({ dataMask, activeTabs, anchor } = permalinkValue.state);
-          chartStates = permalinkValue.state.chartStates as
-            | DashboardChartStates
-            | undefined;
+      try {
+        if (permalinkKey) {
+          const permalinkValue = await getPermalinkValue(permalinkKey);
+          if (permalinkValue?.state) {
+            dataMask = permalinkValue.state.dataMask ?? {};
+            ({ activeTabs, anchor } = permalinkValue.state);
+            chartStates = permalinkValue.state.chartStates as
+              | DashboardChartStates
+              | undefined;
+          }
+
+          if (restorePermalinkDataMask) {
+            const sanitized = sanitizeShareableDashboardState({
+              dataMask,
+              activeTabs,
+              anchor,
+              nativeFilterConfiguration: dashboard?.metadata
+                ?.native_filter_configuration as
+                | Record<string, Record<string, unknown> | undefined>
+                | readonly Record<string, unknown>[]
+                | undefined,
+              charts,
+              chartConfiguration: dashboard?.metadata?.chart_configuration,
+              crossFiltersEnabled:
+                dashboard?.metadata?.cross_filters_enabled !== false,
+              layout: dashboard?.position_data,
+            });
+            ({
+              state: { dataMask, activeTabs },
+              anchor,
+            } = sanitized);
+            chartStates = {};
+            logDashboardStateDrops('restore', sanitized.dropped);
+          }
+        } else if (nativeFilterKeyValue) {
+          dataMask = await getFilterValue(id, nativeFilterKeyValue);
         }
-      } else if (nativeFilterKeyValue) {
-        dataMask = await getFilterValue(id, nativeFilterKeyValue);
+      } catch {
+        logging.error('Dashboard URL state hydration failed');
+        dataMask = {};
+        activeTabs = null;
+        chartStates = null;
+        anchor = undefined;
       }
-      if (isOldRison) {
+      if (isOldRison && !restorePermalinkDataMask) {
         dataMask = isOldRison;
       }
 
-      if (readyToRender) {
-        if (!isDashboardHydrated.current) {
-          isDashboardHydrated.current = true;
-        }
+      if (readyToRender && !cancelled) {
         dispatch(
           hydrateDashboard({
             history,
@@ -207,8 +264,11 @@ export const DashboardPage: FC<PageProps> = ({ idOrSlug }: PageProps) => {
             activeTabs: activeTabs ?? null,
             dataMask,
             chartStates: chartStates ?? null,
+            restorePermalinkDataMask,
           } as unknown as Parameters<typeof hydrateDashboard>[0]),
         );
+        hydrationCompleted = true;
+        setHydratedPageKey(idOrSlug);
 
         // Scroll to anchor element if specified in permalink state
         if (anchor) {
@@ -223,9 +283,18 @@ export const DashboardPage: FC<PageProps> = ({ idOrSlug }: PageProps) => {
       }
       return null;
     }
-    if (id) getDataMaskApplied();
+    if (id && readyToRender && !isDashboardHydrated.current) {
+      isDashboardHydrated.current = true;
+      hydrateWithUrlState();
+    }
+    return () => {
+      cancelled = true;
+      if (!hydrationCompleted) {
+        isDashboardHydrated.current = false;
+      }
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [readyToRender]);
+  }, [id, idOrSlug, readyToRender]);
 
   // Capture original title before any effects run
   const originalTitle = useMemo(() => document.title, []);
@@ -290,7 +359,9 @@ export const DashboardPage: FC<PageProps> = ({ idOrSlug }: PageProps) => {
   return (
     <>
       <Global styles={globalStyles} />
-      {readyToRender && hasDashboardInfoInitiated ? (
+      {readyToRender &&
+      hasDashboardInfoInitiated &&
+      hydratedPageKey === idOrSlug ? (
         <>
           <SyncDashboardState dashboardPageId={dashboardPageId} />
           <DashboardPageIdContext.Provider value={dashboardPageId}>

@@ -18,7 +18,11 @@
  */
 import { useState } from 'react';
 import { t } from '@apache-superset/core/translation';
-import { getClientErrorObject } from '@superset-ui/core';
+import {
+  FeatureFlag,
+  getClientErrorObject,
+  isFeatureEnabled,
+} from '@superset-ui/core';
 import { useTheme } from '@apache-superset/core/theme';
 import {
   Button,
@@ -33,6 +37,10 @@ import { shallowEqual, useSelector } from 'react-redux';
 import { RootState } from 'src/dashboard/types';
 import { Typography } from '@superset-ui/core/components/Typography';
 import { hasStatefulCharts } from 'src/dashboard/util/chartStateConverter';
+import {
+  logDashboardStateDrops,
+  sanitizeShareableDashboardState,
+} from 'src/dashboard/permalink/sanitizeShareableState';
 
 export type URLShortLinkButtonProps = {
   dashboardId: number;
@@ -52,29 +60,63 @@ export default function URLShortLinkButton({
   const theme = useTheme();
   const [shortUrl, setShortUrl] = useState('');
   const { addDangerToast } = useToasts();
-  const { dataMask, activeTabs, chartStates, sliceEntities } = useSelector(
+  const {
+    dataMask,
+    activeTabs,
+    chartStates,
+    sliceEntities,
+    nativeFilterConfiguration,
+    chartConfiguration,
+    crossFiltersEnabled,
+    dashboardLayout,
+  } = useSelector(
     (state: RootState) => ({
       dataMask: state.dataMask,
       activeTabs: state.dashboardState.activeTabs,
       chartStates: state.dashboardState.chartStates,
       sliceEntities: state.sliceEntities?.slices,
+      nativeFilterConfiguration: state.nativeFilters.filters,
+      chartConfiguration: state.dashboardInfo.metadata?.chart_configuration,
+      crossFiltersEnabled: state.dashboardInfo.crossFiltersEnabled,
+      dashboardLayout: state.dashboardLayout.present,
     }),
     shallowEqual,
   );
 
   const getCopyUrl = async () => {
     try {
+      const shareableStateEnabled = isFeatureEnabled(
+        FeatureFlag.DashboardCrossFilterPermalink,
+      );
+      const sanitized = shareableStateEnabled
+        ? sanitizeShareableDashboardState({
+            dataMask,
+            activeTabs,
+            anchor: anchorLinkId,
+            nativeFilterConfiguration,
+            charts: sliceEntities,
+            chartConfiguration,
+            crossFiltersEnabled,
+            layout: dashboardLayout,
+          })
+        : undefined;
+      if (sanitized) {
+        logDashboardStateDrops('save', sanitized.dropped);
+      }
       // Check if dashboard has AG Grid tables (Table V2)
       const includeChartState =
+        !shareableStateEnabled &&
         hasStatefulCharts(sliceEntities) &&
         chartStates &&
         Object.keys(chartStates).length > 0;
 
       const result = await getDashboardPermalink({
         dashboardId,
-        dataMask,
-        activeTabs,
-        anchor: anchorLinkId,
+        dataMask: sanitized?.state.dataMask ?? dataMask,
+        activeTabs: sanitized?.state.activeTabs ?? activeTabs,
+        anchor:
+          sanitized?.anchor ??
+          (shareableStateEnabled ? undefined : anchorLinkId),
         chartStates: includeChartState ? chartStates : undefined,
         includeChartState,
       });

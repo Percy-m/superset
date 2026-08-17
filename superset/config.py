@@ -555,6 +555,9 @@ DEFAULT_FEATURE_FLAGS: dict[str, bool] = {
     # Experimental PyArrow engine for CSV parsing (may have issues with dates/nulls)
     # @lifecycle: development
     "CSV_UPLOAD_PYARROW_ENGINE": False,
+    # Enables sanitized cross-filter and Table alert state in dashboard permalinks
+    # @lifecycle: development
+    "DASHBOARD_CROSS_FILTER_PERMALINK": False,
     # Allow metrics and columns to be grouped into folders in the chart builder
     # @lifecycle: development
     "DATASET_FOLDERS": False,

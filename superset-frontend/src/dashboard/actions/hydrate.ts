@@ -98,6 +98,7 @@ interface HydrateDashboardParams {
   dataMask: DataMaskStateWithId;
   activeTabs: string[] | null;
   chartStates: DashboardChartStates | null;
+  restorePermalinkDataMask?: boolean;
 }
 
 export const hydrateDashboard =
@@ -108,6 +109,7 @@ export const hydrateDashboard =
     dataMask,
     activeTabs,
     chartStates,
+    restorePermalinkDataMask = false,
   }: HydrateDashboardParams) =>
   (dispatch: AppDispatch, getState: GetState): AnyAction => {
     const { user, common, dashboardState } = getState();
@@ -363,6 +365,7 @@ export const hydrateDashboard =
           crossFiltersEnabled,
         },
         dataMask,
+        restorePermalinkDataMask,
         dashboardFilters,
         nativeFilters,
         dashboardState: {

@@ -318,9 +318,10 @@ export type ActiveFilters = {
 };
 
 export interface DashboardPermalinkState {
-  dataMask: DataMaskStateWithId;
-  activeTabs: string[];
-  anchor: string;
+  dataMask?: DataMaskStateWithId;
+  activeTabs?: string[];
+  anchor?: string;
+  /** Legacy permalink fields are accepted and removed by state sanitization. */
   urlParams?: UrlParamEntries;
   chartStates?: Record<string, JsonObject>;
 }
