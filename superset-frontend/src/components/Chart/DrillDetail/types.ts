@@ -17,10 +17,11 @@
  * under the License.
  */
 import { GenericDataType } from '@apache-superset/core/common';
+import { DataRecord } from '@superset-ui/core';
 
 export type ResultsPage = {
   total: number;
-  data: Record<string, any>[];
+  data: DataRecord[];
   colNames: string[];
   colTypes: GenericDataType[];
 };

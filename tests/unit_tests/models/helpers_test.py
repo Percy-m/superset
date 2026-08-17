@@ -1745,6 +1745,43 @@ def test_orderby_adhoc_column(database: Database) -> None:
     assert "ORDER BY" in sql.upper()
 
 
+def test_clickhouse_configurable_drill_detail_orders_nullable_columns(
+    database: Database,
+) -> None:
+    """FR-01 adds an explicit null discriminator only to its ClickHouse queries."""
+    from superset.connectors.sqla.models import SqlaTable, TableColumn
+
+    table = SqlaTable(
+        database=database,
+        schema=None,
+        table_name="t",
+        columns=[TableColumn(column_name="b", type="Nullable(String)")],
+    )
+
+    with patch.object(type(database), "backend", "clickhouse"):
+        configurable_query = table.get_sqla_query(
+            columns=["b"],
+            orderby=[("b", True)],
+            metrics=[],
+            extras={"__configurable_drill_detail_null_ordering": True},
+            filter=[],
+            granularity=None,
+            is_timeseries=False,
+        )
+        legacy_query = table.get_sqla_query(
+            columns=["b"],
+            orderby=[("b", True)],
+            metrics=[],
+            extras={},
+            filter=[],
+            granularity=None,
+            is_timeseries=False,
+        )
+
+    assert "ORDER BY isNull(b) ASC, b ASC" in str(configurable_query.sqla_query)
+    assert "isNull" not in str(legacy_query.sqla_query)
+
+
 def test_extras_where_is_parenthesized(
     database: Database,
 ) -> None:

@@ -844,3 +844,99 @@ def test_get_samples_pagination(test_client, login_as_admin, virtual_dataset):
     assert rv.json["result"]["per_page"] == 2
     assert rv.json["result"]["total_count"] == 10
     assert [row["col1"] for row in rv.json["result"]["data"]] == []
+
+
+@with_feature_flags(DRILL_DETAIL_CONFIGURABLE_TABLE=False)
+def test_configurable_drill_detail_requires_feature_flag(
+    test_client, login_as_admin, virtual_dataset
+):
+    """New modes are unavailable while the feature flag is disabled."""
+    uri = (
+        f"/datasource/samples?datasource_id={virtual_dataset.id}"
+        "&datasource_type=table&detail_mode=server&per_page=50"
+    )
+
+    response = test_client.post(uri, json={})
+
+    assert response.status_code == 400
+    assert response.json["error_code"] == "DRILL_DETAIL_FEATURE_DISABLED"
+
+
+@with_feature_flags(DRILL_DETAIL_CONFIGURABLE_TABLE=True)
+def test_configurable_drill_detail_server_search(
+    test_client, login_as_admin, virtual_dataset
+):
+    """Server mode applies trusted prefix search to page data and count."""
+    uri = (
+        f"/datasource/samples?datasource_id={virtual_dataset.id}"
+        "&datasource_type=table&detail_mode=server&per_page=2&page=1"
+    )
+
+    response = test_client.post(
+        uri,
+        json={"search": {"column": "col2", "value": "a"}},
+    )
+
+    assert response.status_code == 200
+    assert response.json["result"]["detail_mode"] == "server"
+    assert response.json["result"]["per_page"] == 2
+    assert response.json["result"]["total_count"] == 1
+    assert response.json["result"]["bounds"]["row_count"] == 1
+    assert all(row["col2"].startswith("a") for row in response.json["result"]["data"])
+
+
+@with_feature_flags(DRILL_DETAIL_CONFIGURABLE_TABLE=True)
+def test_configurable_drill_detail_bounded_client(
+    test_client, login_as_admin, virtual_dataset
+):
+    """Bounded-client mode returns the complete fixture within safety limits."""
+    uri = (
+        f"/datasource/samples?datasource_id={virtual_dataset.id}"
+        "&datasource_type=table&detail_mode=bounded_client&per_page=50&page=9"
+    )
+
+    response = test_client.post(uri, json={})
+
+    assert response.status_code == 200
+    assert response.json["result"]["detail_mode"] == "bounded_client"
+    assert response.json["result"]["total_count"] == 10
+    assert len(response.json["result"]["data"]) == 10
+    assert response.json["result"]["bounds"]["cell_count"] == (
+        len(response.json["result"]["data"]) * len(response.json["result"]["colnames"])
+    )
+
+
+@with_feature_flags(DRILL_DETAIL_CONFIGURABLE_TABLE=True)
+@pytest.mark.parametrize("per_page", [0, 201])
+def test_configurable_drill_detail_validates_server_page_length(
+    test_client, login_as_admin, virtual_dataset, per_page
+):
+    """Server page size accepts only integers from one through two hundred."""
+    uri = (
+        f"/datasource/samples?datasource_id={virtual_dataset.id}"
+        f"&datasource_type=table&detail_mode=server&per_page={per_page}"
+    )
+
+    response = test_client.post(uri, json={})
+
+    assert response.status_code == 400
+    assert response.json["error_code"] == "DRILL_DETAIL_INVALID_MODE"
+
+
+@with_feature_flags(DRILL_DETAIL_CONFIGURABLE_TABLE=True)
+def test_configurable_drill_detail_rejects_numeric_search_column(
+    test_client, login_as_admin, virtual_dataset
+):
+    """A client cannot use numeric or computed fields for prefix search."""
+    uri = (
+        f"/datasource/samples?datasource_id={virtual_dataset.id}"
+        "&datasource_type=table&detail_mode=server&per_page=50"
+    )
+
+    response = test_client.post(
+        uri,
+        json={"search": {"column": "col1", "value": "1"}},
+    )
+
+    assert response.status_code == 400
+    assert response.json["error_code"] == "DRILL_DETAIL_INVALID_SEARCH_COLUMN"

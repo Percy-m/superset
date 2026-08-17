@@ -18,7 +18,7 @@
  */
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { t } from '@apache-superset/core/translation';
-import { ensureIsArray } from '@superset-ui/core';
+import { DataRecord, ensureIsArray } from '@superset-ui/core';
 import { styled } from '@apache-superset/core/theme';
 import { EmptyState, Loading } from '@superset-ui/core/components';
 import { GenericDataType } from '@apache-superset/core/common';
@@ -64,7 +64,7 @@ export const SamplesPane = ({
 }: SamplesPaneProps) => {
   const [filterText, setFilterText] = useState('');
   const [rowLimit, setRowLimit] = useState(DEFAULT_ROW_LIMIT);
-  const [data, setData] = useState<Record<string, any>[][]>([]);
+  const [data, setData] = useState<DataRecord[]>([]);
   const [colnames, setColnames] = useState<string[]>([]);
   const [coltypes, setColtypes] = useState<GenericDataType[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);

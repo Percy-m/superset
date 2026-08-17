@@ -17,7 +17,15 @@
 from typing import Any, Optional, TypedDict
 
 from flask import current_app as app
-from marshmallow import fields, post_load, pre_load, Schema, validate
+from marshmallow import (
+    fields,
+    post_load,
+    pre_load,
+    Schema,
+    validate,
+    validates_schema,
+    ValidationError,
+)
 
 from superset.charts.schemas import ChartDataExtrasSchema, ChartDataFilterSchema
 from superset.utils.core import DatasourceType
@@ -70,6 +78,17 @@ class ExternalMetadataSchema(Schema):
         )
 
 
+class SamplesSearchSchema(Schema):
+    column = fields.String(
+        required=True,
+        validate=validate.Length(min=1, max=255),
+    )
+    value = fields.String(
+        required=True,
+        validate=validate.Length(max=1024),
+    )
+
+
 class SamplesPayloadSchema(Schema):
     filters = fields.List(fields.Nested(ChartDataFilterSchema), required=False)
     granularity = fields.String(
@@ -83,6 +102,7 @@ class SamplesPayloadSchema(Schema):
         metadata={"description": "Extra parameters to add to the query."},
         allow_none=True,
     )
+    search = fields.Nested(SamplesSearchSchema, required=False)
 
     @pre_load
     # pylint: disable=unused-argument
@@ -104,6 +124,12 @@ class SamplesRequestSchema(Schema):
         load_default=None,
     )
     dashboard_id = fields.Integer(required=False, allow_none=True, load_default=None)
+    detail_mode = fields.String(
+        required=False,
+        allow_none=True,
+        load_default=None,
+        validate=validate.OneOf(["server", "bounded_client"]),
+    )
 
     @pre_load
     def set_default_per_page(
@@ -118,3 +144,15 @@ class SamplesRequestSchema(Schema):
         if "per_page" not in data:
             data["per_page"] = app.config.get("SAMPLES_ROW_LIMIT", 1000)
         return data
+
+    @validates_schema
+    def validate_configurable_detail(self, data: dict[str, Any], **kwargs: Any) -> None:
+        """Validate pagination constraints without changing legacy requests."""
+        if data.get("detail_mode") is None:
+            return
+        if data["page"] < 1:
+            raise ValidationError({"page": ["Must be greater than or equal to 1."]})
+        if data["detail_mode"] == "server" and data["per_page"] > 200:
+            raise ValidationError(
+                {"per_page": ["Must be less than or equal to 200 in server mode."]}
+            )

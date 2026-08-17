@@ -2781,6 +2781,7 @@ class ExploreMixin:  # pylint: disable=too-many-public-methods
 
         # Since orderby may use adhoc metrics, too; we need to process them first
         orderby_exprs: list[ColumnElement] = []
+        orderby_directions: list[bool] = []
         for orig_col, ascending in orderby:  # noqa: B007
             col: Union[AdhocMetric, ColumnElement] = orig_col
             if isinstance(col, dict):
@@ -2832,7 +2833,20 @@ class ExploreMixin:  # pylint: disable=too-many-public-methods
                     )
 
             if isinstance(col, ColumnElement):
+                table_column = (
+                    columns_by_name.get(orig_col) if isinstance(orig_col, str) else None
+                )
+                if (
+                    extras.get("__configurable_drill_detail_null_ordering")
+                    and self.database.backend.startswith("clickhouse")
+                    and table_column is not None
+                    and isinstance(table_column.type, str)
+                    and "Nullable(" in table_column.type
+                ):
+                    orderby_exprs.append(sa.func.isNull(col))
+                    orderby_directions.append(True)
                 orderby_exprs.append(col)
+                orderby_directions.append(ascending)
             else:
                 # Could not convert a column reference to valid ColumnElement
                 raise QueryObjectValidationError(
@@ -3276,7 +3290,7 @@ class ExploreMixin:  # pylint: disable=too-many-public-methods
 
         self.make_orderby_compatible(select_exprs, orderby_exprs)
 
-        for col, (_orig_col, ascending) in zip(orderby_exprs, orderby, strict=False):  # noqa: B007
+        for col, ascending in zip(orderby_exprs, orderby_directions, strict=False):
             if not db_engine_spec.allows_alias_in_orderby and isinstance(col, Label):
                 # if engine does not allow using SELECT alias in ORDER BY
                 # revert to the underlying column

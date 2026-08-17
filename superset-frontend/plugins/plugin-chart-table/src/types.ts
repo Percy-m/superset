@@ -57,6 +57,10 @@ export type TableChartFormData = QueryFormData & {
   color_pn?: boolean;
   include_time?: boolean;
   include_search?: boolean;
+  drill_detail_server_pagination?: boolean;
+  drill_detail_server_page_length?: number;
+  drill_detail_client_page_length?: number;
+  drill_detail_include_search?: boolean;
   query_mode?: QueryMode;
   page_length?: string | number | null; // null means auto-paginate
   metrics?: QueryFormMetric[] | null;

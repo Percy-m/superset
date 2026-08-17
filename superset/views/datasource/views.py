@@ -25,10 +25,11 @@ from flask_babel import _
 from marshmallow import ValidationError
 from sqlalchemy.exc import NoResultFound, NoSuchTableError
 
-from superset import db, event_logger, security_manager
+from superset import db, event_logger, is_feature_enabled, security_manager
 from superset.commands.dataset.exceptions import (
     DatasetForbiddenError,
     DatasetNotFoundError,
+    DatasetSamplesFeatureError,
 )
 from superset.commands.utils import populate_owner_list
 from superset.connectors.sqla.models import SqlaTable
@@ -209,9 +210,32 @@ class Datasource(BaseSupersetView):
     def samples(self) -> FlaskResponse:
         try:
             params = SamplesRequestSchema().load(request.args)
+        except ValidationError as err:
+            return json_error_response(
+                err.messages,
+                status=400,
+                payload={"error_code": "DRILL_DETAIL_INVALID_MODE"}
+                if request.args.get("detail_mode") is not None
+                else None,
+            )
+        try:
             payload = SamplesPayloadSchema().load(request.json)
         except ValidationError as err:
             return json_error_response(err.messages, status=400)
+        if params["detail_mode"] and not is_feature_enabled(
+            "DRILL_DETAIL_CONFIGURABLE_TABLE"
+        ):
+            return json_error_response(
+                _("Configurable drill detail is disabled."),
+                status=400,
+                payload={"error_code": "DRILL_DETAIL_FEATURE_DISABLED"},
+            )
+        if payload.get("search") and not params["detail_mode"]:
+            return json_error_response(
+                _("Structured search requires configurable server drill detail."),
+                status=400,
+                payload={"error_code": "DRILL_DETAIL_SEARCH_REQUIRES_SERVER_MODE"},
+            )
         dashboard_id = None
         if security_manager.is_guest_user():
             if not params["dashboard_id"]:
@@ -229,15 +253,23 @@ class Datasource(BaseSupersetView):
             ):
                 return json_error_response(_("Forbidden"), status=403)
 
-        rv = get_samples(
-            datasource_type=params["datasource_type"],
-            datasource_id=params["datasource_id"],
-            force=params["force"],
-            page=params["page"],
-            per_page=params["per_page"],
-            payload=payload,
-            dashboard_id=dashboard_id,
-        )
+        try:
+            rv = get_samples(
+                datasource_type=params["datasource_type"],
+                datasource_id=params["datasource_id"],
+                force=params["force"],
+                page=params["page"],
+                per_page=params["per_page"],
+                payload=payload,
+                dashboard_id=dashboard_id,
+                detail_mode=params["detail_mode"],
+            )
+        except DatasetSamplesFeatureError as ex:
+            return json_error_response(
+                ex.message,
+                status=ex.status,
+                payload={"error_code": ex.error_code},
+            )
         return self.json_response({"result": rv})
 
 

@@ -40,6 +40,12 @@
         "description": "Enable support for date range timeshifts (e.g., \"2015-01-03 : 2015-01-04\") in addition to relative timeshifts (e.g., \"1 day ago\")"
       },
       {
+        "name": "DRILL_DETAIL_CONFIGURABLE_TABLE",
+        "default": false,
+        "lifecycle": "development",
+        "description": "Enables configurable pagination and search for Table drill detail"
+      },
+      {
         "name": "ENABLE_ADVANCED_DATA_TYPES",
         "default": false,
         "lifecycle": "development",

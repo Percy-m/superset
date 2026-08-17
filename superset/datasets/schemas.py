@@ -29,7 +29,7 @@ from marshmallow import (
 )
 from marshmallow.validate import Length, OneOf
 
-from superset import security_manager
+from superset import is_feature_enabled, security_manager
 from superset.connectors.sqla.models import SqlaTable
 from superset.exceptions import SupersetMarshmallowValidationError
 from superset.models.sql_types import parse_currency_string
@@ -422,6 +422,15 @@ class DatasetCacheWarmUpResponseSchema(Schema):
 class DatasetColumnDrillInfoSchema(Schema):
     column_name = fields.String(required=True)
     verbose_name = fields.String(required=False)
+    type_generic = fields.Integer(allow_none=True)
+    filterable = fields.Boolean()
+    is_active = fields.Boolean()
+    is_physical = fields.Method("get_is_physical")
+
+    @staticmethod
+    def get_is_physical(column: Any) -> bool:
+        """Report physical status without exposing a calculated SQL expression."""
+        return not bool(getattr(column, "expression", None))
 
 
 class UserSchema(Schema):
@@ -459,6 +468,13 @@ class DatasetDrillInfoSchema(Schema):
             for col in serialized.get("columns", [])
             if col["column_name"] in dimensions
         ]
+
+        if not is_feature_enabled("DRILL_DETAIL_CONFIGURABLE_TABLE"):
+            for column in serialized["columns"]:
+                column.pop("type_generic", None)
+                column.pop("filterable", None)
+                column.pop("is_active", None)
+                column.pop("is_physical", None)
 
         if security_manager.is_guest_user():
             return {"id": serialized["id"], "columns": serialized["columns"]}

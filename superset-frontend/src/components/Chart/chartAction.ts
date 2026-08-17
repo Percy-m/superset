@@ -27,10 +27,12 @@ import {
   JsonObject,
   QueryData,
   AnnotationLayer,
+  DataRecord,
   DataMask,
   DatasourceType,
   LatestQueryFormData,
 } from '@superset-ui/core';
+import { GenericDataType } from '@apache-superset/core/common';
 import { t } from '@apache-superset/core/translation';
 import type { ControlStateMapping } from '@superset-ui/chart-controls';
 import { getControlsState } from 'src/explore/store';
@@ -303,6 +305,25 @@ export interface DatasourceSamplesSearchParams {
   dashboard_id?: number;
   per_page?: number;
   page?: number;
+  detail_mode?: DrillDetailMode;
+}
+
+export type DrillDetailMode = 'server' | 'bounded_client';
+
+export interface DrillDetailSearch {
+  column: string;
+  value: string;
+}
+
+export interface DatasourceSamplesResult {
+  data: DataRecord[];
+  colnames: string[];
+  coltypes: GenericDataType[];
+  total_count: number;
+  page?: number;
+  per_page?: number;
+  detail_mode?: DrillDetailMode;
+  rowcount: number;
 }
 
 // Action creators
@@ -988,7 +1009,10 @@ export const getDatasourceSamples = async (
   perPage?: number,
   page?: number,
   dashboardId?: number,
-): Promise<JsonObject> => {
+  detailMode?: DrillDetailMode,
+  search?: DrillDetailSearch,
+  signal?: AbortSignal,
+): Promise<DatasourceSamplesResult> => {
   try {
     const searchParams: DatasourceSamplesSearchParams = {
       force,
@@ -1005,14 +1029,19 @@ export const getDatasourceSamples = async (
       searchParams.page = page;
     }
 
+    if (detailMode) {
+      searchParams.detail_mode = detailMode;
+    }
+
     const response = await SupersetClient.post({
       endpoint: '/datasource/samples',
-      jsonPayload,
+      jsonPayload: search ? { ...jsonPayload, search } : jsonPayload,
       searchParams,
       parseMethod: 'json-bigint',
+      signal,
     });
 
-    return response.json.result;
+    return response.json.result as DatasourceSamplesResult;
   } catch (err) {
     const clientError = await getClientErrorObject(err);
     throw new Error(

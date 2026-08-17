@@ -21,6 +21,7 @@ import unittest
 from datetime import timedelta
 from io import BytesIO
 from unittest.mock import ANY, patch
+from uuid import uuid4
 from zipfile import is_zipfile, ZipFile
 
 import prison
@@ -38,7 +39,7 @@ from superset.extensions import db, security_manager
 from superset.models.core import Database
 from superset.models.slice import Slice
 from superset.utils import json
-from superset.utils.core import backend, get_example_default_schema
+from superset.utils.core import backend, GenericDataType, get_example_default_schema
 from superset.utils.database import get_example_database, get_main_database
 from superset.utils.dict_import_export import export_to_dict
 from tests.integration_tests.base_tests import SupersetTestCase
@@ -3139,6 +3140,58 @@ class TestDatasetApi(SupersetTestCase):
         ]
 
         self.items_to_delete = [dataset]
+
+    @with_feature_flags(DRILL_DETAIL_CONFIGURABLE_TABLE=True)
+    def test_get_drill_info_includes_configurable_search_metadata(self):
+        """FR-01 exposes safe search metadata without calculated SQL text."""
+        self.login(ADMIN_USERNAME)
+        dataset = self.insert_dataset(
+            table_name=f"test_drill_search_metadata_{uuid4().hex}",
+            owners=[],
+            columns=[
+                TableColumn(
+                    column_name="category",
+                    type="VARCHAR(255)",
+                    groupby=True,
+                    filterable=True,
+                ),
+                TableColumn(
+                    column_name="category_upper",
+                    type="VARCHAR(255)",
+                    expression="UPPER(category)",
+                    groupby=True,
+                    filterable=True,
+                ),
+            ],
+            fetch_metadata=False,
+        )
+        self.items_to_delete = [dataset]
+
+        response = self.get_assert_metric(
+            f"api/v1/dataset/{dataset.id}/drill_info/", "get_drill_info"
+        )
+
+        assert response.status_code == 200
+        columns = json.loads(response.data.decode("utf-8"))["result"]["columns"]
+        assert columns == [
+            {
+                "column_name": "category",
+                "filterable": True,
+                "is_active": True,
+                "is_physical": True,
+                "type_generic": GenericDataType.STRING,
+                "verbose_name": None,
+            },
+            {
+                "column_name": "category_upper",
+                "filterable": True,
+                "is_active": True,
+                "is_physical": False,
+                "type_generic": GenericDataType.STRING,
+                "verbose_name": None,
+            },
+        ]
+        assert "expression" not in columns[1]
 
     def test_get_drill_info_admin_user_dataset_not_found(self):
         """

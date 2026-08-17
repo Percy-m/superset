@@ -182,6 +182,15 @@ class DatasetSamplesFailedError(CommandInvalidError):
     message = _("Samples for dataset could not be retrieved.")
 
 
+class DatasetSamplesFeatureError(CommandInvalidError):
+    """Error raised for configurable drill-detail validation failures."""
+
+    def __init__(self, message: str, error_code: str, status: int = 422) -> None:
+        super().__init__(message)
+        self.error_code = error_code
+        self.status = status
+
+
 class DatasetForbiddenError(ForbiddenError):
     message = _("Changing this dataset is forbidden")
 

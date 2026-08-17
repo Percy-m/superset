@@ -46,7 +46,9 @@ import {
 import { t } from '@apache-superset/core/translation';
 import {
   ensureIsArray,
+  FeatureFlag,
   isAdhocColumn,
+  isFeatureEnabled,
   isPhysicalColumn,
   validateInteger,
   QueryFormColumn,
@@ -82,6 +84,16 @@ function isQueryMode(mode: QueryMode) {
 
 const isAggMode = isQueryMode(QueryMode.Aggregate);
 const isRawMode = isQueryMode(QueryMode.Raw);
+
+const isConfigurableDrillDetailVisible = ({
+  controls,
+}: ControlPanelsContainerProps) =>
+  isFeatureEnabled(FeatureFlag.DrillDetailConfigurableTable) &&
+  isAggMode({ controls }) &&
+  ensureIsArray(controls?.metrics?.value).length > 0;
+
+const validatePositivePageLength = (value: unknown) =>
+  Number(value) < 1 ? t('Value must be at least 1') : false;
 
 const validateAggControlValues = (
   controls: ControlStateMapping,
@@ -469,6 +481,84 @@ const config: ControlPanelConfig = {
               ),
               visibility: isAggMode,
               resetOnHide: false,
+            },
+          },
+        ],
+      ],
+    },
+    {
+      label: t('Drill detail'),
+      expanded: true,
+      visibility: isConfigurableDrillDetailVisible,
+      controlSetRows: [
+        [
+          {
+            name: 'drill_detail_server_pagination',
+            config: {
+              type: 'CheckboxControl',
+              label: t('Server pagination'),
+              description: t(
+                'Fetch drill detail one page at a time from the server.',
+              ),
+              default: true,
+            },
+          },
+        ],
+        [
+          {
+            name: 'drill_detail_server_page_length',
+            config: {
+              type: 'SelectControl',
+              freeForm: true,
+              clearable: false,
+              label: t('Server page length'),
+              description: t('Rows per server-side drill detail page (1-200).'),
+              default: 50,
+              choices: SERVER_PAGE_SIZE_OPTIONS,
+              visibility: ({ controls }: ControlPanelsContainerProps) =>
+                Boolean(controls?.drill_detail_server_pagination?.value),
+              validators: [
+                withLabel(validateInteger, t('Server page length')),
+                validatePositivePageLength,
+                value => validateMaxValue(value, 200),
+              ],
+            },
+          },
+        ],
+        [
+          {
+            name: 'drill_detail_client_page_length',
+            config: {
+              type: 'SelectControl',
+              freeForm: true,
+              clearable: false,
+              label: t('Client page length'),
+              description: t(
+                'Rows per page after the bounded drill detail result is loaded.',
+              ),
+              default: 50,
+              choices: SERVER_PAGE_SIZE_OPTIONS,
+              visibility: ({ controls }: ControlPanelsContainerProps) =>
+                !controls?.drill_detail_server_pagination?.value,
+              validators: [
+                withLabel(validateInteger, t('Client page length')),
+                validatePositivePageLength,
+                value => validateMaxValue(value, 200),
+              ],
+            },
+          },
+        ],
+        [
+          {
+            name: 'drill_detail_include_search',
+            config: {
+              type: 'CheckboxControl',
+              label: t('Search box'),
+              renderTrigger: true,
+              default: false,
+              description: t(
+                'Show server column-prefix search or bounded client full-row search.',
+              ),
             },
           },
         ],

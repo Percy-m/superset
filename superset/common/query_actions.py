@@ -45,6 +45,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+CONFIGURABLE_DRILL_DETAIL_ORDERBY_KEY = "__configurable_drill_detail_null_ordering"
+
 
 def _get_datasource(query_context: QueryContext, query_obj: QueryObject) -> Explorable:
     return query_obj.datasource or query_context.datasource
@@ -242,7 +244,11 @@ def _get_drill_detail(
         else:
             qry_obj_cols.append(o.column_name)
     query_obj.columns = qry_obj_cols
-    query_obj.orderby = [(query_obj.columns[0], True)]
+    if (
+        not query_obj.extras.get(CONFIGURABLE_DRILL_DETAIL_ORDERBY_KEY)
+        or not query_obj.orderby
+    ):
+        query_obj.orderby = [(query_obj.columns[0], True)]
     return _get_full(query_context, query_obj, force_cached)
 
 

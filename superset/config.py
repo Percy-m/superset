@@ -562,6 +562,9 @@ DEFAULT_FEATURE_FLAGS: dict[str, bool] = {
     # in addition to relative timeshifts (e.g., "1 day ago")
     # @lifecycle: development
     "DATE_RANGE_TIMESHIFTS_ENABLED": False,
+    # Enables configurable pagination and search for Table drill detail
+    # @lifecycle: development
+    "DRILL_DETAIL_CONFIGURABLE_TABLE": False,
     # Enables advanced data type support
     # @lifecycle: development
     "ENABLE_ADVANCED_DATA_TYPES": False,

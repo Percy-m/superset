@@ -18,6 +18,12 @@
  */
 import { Column, Metric } from '@superset-ui/core';
 
+export type DrillInfoColumn = Column & {
+  filterable?: boolean;
+  is_active?: boolean;
+  is_physical?: boolean;
+};
+
 export enum DrillByType {
   Chart,
   Table,
@@ -40,7 +46,7 @@ export type Dataset = {
     first_name: string;
     last_name: string;
   }[];
-  columns?: Column[];
+  columns?: DrillInfoColumn[];
   drillable_columns?: Column[];
   metrics?: Metric[];
   verbose_map?: Record<string, string>;

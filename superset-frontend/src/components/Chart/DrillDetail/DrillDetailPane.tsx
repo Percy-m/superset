@@ -29,10 +29,14 @@ import { useSelector } from 'react-redux';
 import { t } from '@apache-superset/core/translation';
 import {
   BinaryQueryObjectFilterClause,
+  DataRecord,
   DatasourceType,
   ensureIsArray,
+  FeatureFlag,
+  isFeatureEnabled,
   JsonObject,
   QueryFormData,
+  QueryMode,
 } from '@superset-ui/core';
 import { css, useTheme } from '@apache-superset/core/theme';
 import { GenericDataType } from '@apache-superset/core/common';
@@ -40,8 +44,17 @@ import { useResizeDetector } from 'react-resize-detector';
 import BooleanCell from '@superset-ui/core/components/Table/cell-renderers/BooleanCell';
 import NullCell from '@superset-ui/core/components/Table/cell-renderers/NullCell';
 import TimeCell from '@superset-ui/core/components/Table/cell-renderers/TimeCell';
-import { EmptyState, Loading } from '@superset-ui/core/components';
-import { getDatasourceSamples } from 'src/components/Chart/chartAction';
+import {
+  EmptyState,
+  Input,
+  Loading,
+  Select,
+} from '@superset-ui/core/components';
+import {
+  DrillDetailMode,
+  DrillDetailSearch,
+  getDatasourceSamples,
+} from 'src/components/Chart/chartAction';
 import Table, {
   ColumnsType,
   TableSize,
@@ -51,14 +64,22 @@ import HeaderWithRadioGroup from '@superset-ui/core/components/Table/header-rend
 import { useDatasetMetadataBar } from 'src/features/datasets/metadataBar/useDatasetMetadataBar';
 import { Dataset } from '../types';
 import TableControls from './DrillDetailTableControls';
-import { getDrillPayload } from './utils';
+import {
+  filterBoundedClientRows,
+  getDrillPayload,
+  normalizeDrillPageLength,
+  validateBoundedClientResult,
+} from './utils';
 import { ResultsPage } from './types';
 
-const PAGE_SIZE = 50;
+const LEGACY_PAGE_SIZE = 50;
 
-interface DataType {
-  [key: string]: any;
-}
+type ConfigurableDrillFormData = QueryFormData & {
+  drill_detail_server_pagination?: boolean;
+  drill_detail_server_page_length?: number;
+  drill_detail_client_page_length?: number;
+  drill_detail_include_search?: boolean;
+};
 
 // Must be outside of the main component due to problems in
 // react-resize-detector with conditional rendering
@@ -87,6 +108,41 @@ export default function DrillDetailPane({
   dataset?: Dataset;
 }) {
   const theme = useTheme();
+  const drillFormData = formData as ConfigurableDrillFormData;
+  const configurableDetailEnabled =
+    isFeatureEnabled(FeatureFlag.DrillDetailConfigurableTable) &&
+    formData.viz_type === 'table' &&
+    formData.query_mode !== QueryMode.Raw &&
+    ensureIsArray(formData.metrics).length > 0;
+  const serverPagination =
+    !configurableDetailEnabled ||
+    drillFormData.drill_detail_server_pagination !== false;
+  const detailMode: DrillDetailMode = serverPagination
+    ? 'server'
+    : 'bounded_client';
+  const pageLength = configurableDetailEnabled
+    ? normalizeDrillPageLength(
+        serverPagination
+          ? drillFormData.drill_detail_server_page_length
+          : drillFormData.drill_detail_client_page_length,
+      )
+    : LEGACY_PAGE_SIZE;
+  const includeSearch =
+    configurableDetailEnabled &&
+    drillFormData.drill_detail_include_search === true;
+  const textSearchColumns = useMemo(
+    () =>
+      ensureIsArray(dataset?.columns).filter(
+        column =>
+          column.type_generic === GenericDataType.String &&
+          column.filterable !== false &&
+          column.is_active !== false &&
+          column.is_physical !== false &&
+          !column.expression,
+      ),
+    [dataset?.columns],
+  );
+
   const [pageIndex, setPageIndex] = useState(0);
   const lastPageIndex = useRef(pageIndex);
   const [filters, setFilters] = useState(initialFilters);
@@ -98,17 +154,23 @@ export default function DrillDetailPane({
   const [timeFormatting, setTimeFormatting] = useState<
     Record<string, TimeFormatting>
   >({});
+  const [searchValue, setSearchValue] = useState('');
+  const [searchColumn, setSearchColumn] = useState(
+    textSearchColumns[0]?.column_name ?? '',
+  );
+  const requestController = useRef<AbortController>();
 
   const dashboardId = useSelector<RootState, number>(
     ({ dashboardInfo }) => dashboardInfo.id,
   );
 
-  const SAMPLES_ROW_LIMIT = useSelector(
-    (state: { common: { conf: JsonObject } }) =>
-      state.common.conf.SAMPLES_ROW_LIMIT,
+  const samplesRowLimit = Number(
+    useSelector(
+      (state: { common: { conf: JsonObject } }) =>
+        state.common.conf.SAMPLES_ROW_LIMIT,
+    ) ?? 1000,
   );
 
-  // Extract datasource ID/type from string ID
   const [datasourceId, datasourceType] = useMemo(
     () => formData.datasource.split('__'),
     [formData.datasource],
@@ -118,18 +180,39 @@ export default function DrillDetailPane({
     dataset,
   });
 
-  // Get page of results
+  const resetResults = useCallback(() => {
+    requestController.current?.abort();
+    setResponseError('');
+    setResultsPages(new Map());
+    setPageIndex(0);
+  }, []);
+
+  useEffect(() => {
+    resetResults();
+  }, [detailMode, pageLength, resetResults]);
+
+  useEffect(() => {
+    if (
+      detailMode === 'server' &&
+      !textSearchColumns.some(column => column.column_name === searchColumn)
+    ) {
+      setSearchColumn(textSearchColumns[0]?.column_name ?? '');
+      setSearchValue('');
+      resetResults();
+    }
+  }, [detailMode, resetResults, searchColumn, textSearchColumns]);
+
+  const resultsPageIndex = detailMode === 'server' ? pageIndex : 0;
   const resultsPage = useMemo(() => {
-    const nextResultsPage = resultsPages.get(pageIndex);
+    const nextResultsPage = resultsPages.get(resultsPageIndex);
     if (nextResultsPage) {
-      lastPageIndex.current = pageIndex;
+      lastPageIndex.current = resultsPageIndex;
       return nextResultsPage;
     }
-
     return resultsPages.get(lastPageIndex.current);
-  }, [pageIndex, resultsPages]);
+  }, [resultsPageIndex, resultsPages]);
 
-  const mappedColumns: ColumnsType<DataType> = useMemo(
+  const mappedColumns: ColumnsType<DataRecord> = useMemo(
     () =>
       resultsPage?.colNames.map((column, index) => ({
         key: column,
@@ -187,108 +270,150 @@ export default function DrillDetailPane({
     ],
   );
 
-  const data: DataType[] = useMemo(
+  const visibleRows = useMemo(
     () =>
-      resultsPage?.data.map((row, index) =>
-        resultsPage?.colNames.reduce(
-          (acc, curr) => ({ ...acc, [curr]: row[curr] }),
-          {
-            key: index,
-          },
-        ),
-      ) || [],
-    [resultsPage?.colNames, resultsPage?.data],
+      detailMode === 'bounded_client'
+        ? filterBoundedClientRows(resultsPage?.data ?? [], searchValue)
+        : (resultsPage?.data ?? []),
+    [detailMode, resultsPage?.data, searchValue],
+  );
+  const data: DataRecord[] = useMemo(
+    () =>
+      visibleRows.map((row, index) => ({
+        ...row,
+        key: `${resultsPageIndex}-${index}`,
+      })),
+    [resultsPageIndex, visibleRows],
+  );
+  const visibleTotal =
+    detailMode === 'bounded_client' ? data.length : resultsPage?.total;
+
+  const handleReload = useCallback(() => {
+    resetResults();
+  }, [resetResults]);
+
+  const handleFiltersChange = useCallback(
+    (nextFilters: BinaryQueryObjectFilterClause[]) => {
+      setFilters(nextFilters);
+      resetResults();
+    },
+    [resetResults],
   );
 
-  // Clear cache on reload button click
-  const handleReload = useCallback(() => {
-    setResponseError('');
-    setResultsPages(new Map());
-    setPageIndex(0);
-  }, []);
+  const handleSearchValueChange = useCallback(
+    (value: string) => {
+      setSearchValue(value);
+      setPageIndex(0);
+      if (detailMode === 'server') {
+        resetResults();
+      }
+    },
+    [detailMode, resetResults],
+  );
 
-  // Clear cache and reset page index if filters change
-  useEffect(() => {
-    setResponseError('');
-    setResultsPages(new Map());
-    setPageIndex(0);
-  }, [filters]);
+  const handleSearchColumnChange = useCallback(
+    (value: string) => {
+      setSearchColumn(value);
+      setPageIndex(0);
+      resetResults();
+    },
+    [resetResults],
+  );
 
-  // Update cache order if page in cache
+  const requestSearch: DrillDetailSearch | undefined = useMemo(() => {
+    const trimmedSearchValue = searchValue.trim();
+    return includeSearch &&
+      detailMode === 'server' &&
+      searchColumn &&
+      trimmedSearchValue
+      ? { column: searchColumn, value: trimmedSearchValue }
+      : undefined;
+  }, [detailMode, includeSearch, searchColumn, searchValue]);
+  const hasCachedPage = resultsPages.has(resultsPageIndex);
+
   useEffect(() => {
-    if (
-      resultsPages.has(pageIndex) &&
-      [...resultsPages.keys()].at(-1) !== pageIndex
-    ) {
-      const nextResultsPages = new Map(resultsPages);
-      nextResultsPages.delete(pageIndex);
-      setResultsPages(
-        nextResultsPages.set(
-          pageIndex,
-          resultsPages.get(pageIndex) as ResultsPage,
-        ),
-      );
+    if (responseError || hasCachedPage) {
+      return undefined;
     }
-  }, [pageIndex, resultsPages]);
-
-  // Download page of results & trim cache if page not in cache
-  useEffect(() => {
-    if (!responseError && !isLoading && !resultsPages.has(pageIndex)) {
-      setIsLoading(true);
-      const jsonPayload = getDrillPayload(formData, filters) ?? {};
-      const cachePageLimit = Math.ceil(SAMPLES_ROW_LIMIT / PAGE_SIZE);
-      getDatasourceSamples(
-        datasourceType as DatasourceType,
-        Number(datasourceId),
-        false,
-        jsonPayload,
-        PAGE_SIZE,
-        pageIndex + 1,
-        dashboardId,
-      )
-        .then(response => {
-          setResultsPages(
-            new Map([
-              ...[...resultsPages.entries()].slice(-cachePageLimit + 1),
-              [
-                pageIndex,
-                {
-                  total: response.total_count,
-                  data: response.data,
-                  colNames: ensureIsArray(response.colnames),
-                  colTypes: ensureIsArray(response.coltypes),
-                },
-              ],
-            ]),
-          );
-          setResponseError('');
-        })
-        .catch(error => {
-          setResponseError(`${error.name}: ${error.message}`);
-        })
-        .finally(() => {
-          setIsLoading(false);
+    const controller = new AbortController();
+    requestController.current?.abort();
+    requestController.current = controller;
+    setIsLoading(true);
+    const jsonPayload = getDrillPayload(formData, filters) ?? {};
+    const cachePageLimit = Math.max(1, Math.ceil(samplesRowLimit / pageLength));
+    getDatasourceSamples(
+      datasourceType as DatasourceType,
+      Number(datasourceId),
+      false,
+      jsonPayload,
+      pageLength,
+      resultsPageIndex + 1,
+      dashboardId,
+      configurableDetailEnabled ? detailMode : undefined,
+      requestSearch,
+      controller.signal,
+    )
+      .then(response => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        const responseData = ensureIsArray(response.data);
+        const columnNames = ensureIsArray(response.colnames);
+        if (detailMode === 'bounded_client') {
+          validateBoundedClientResult(responseData, columnNames);
+        }
+        setResultsPages(currentResultsPages => {
+          const retainedEntries =
+            cachePageLimit > 1
+              ? [...currentResultsPages.entries()].slice(-(cachePageLimit - 1))
+              : [];
+          return new Map([
+            ...retainedEntries,
+            [
+              resultsPageIndex,
+              {
+                total: response.total_count,
+                data: responseData,
+                colNames: columnNames,
+                colTypes: ensureIsArray(response.coltypes),
+              },
+            ] as [number, ResultsPage],
+          ]);
         });
-    }
+        setResponseError('');
+      })
+      .catch(error => {
+        if (!controller.signal.aborted) {
+          setResponseError(`${error.name}: ${error.message}`);
+        }
+      })
+      .finally(() => {
+        if (requestController.current === controller) {
+          setIsLoading(false);
+        }
+      });
+    return () => controller.abort();
   }, [
-    SAMPLES_ROW_LIMIT,
+    configurableDetailEnabled,
+    dashboardId,
     datasourceId,
     datasourceType,
+    detailMode,
     filters,
     formData,
-    isLoading,
-    pageIndex,
+    hasCachedPage,
+    pageLength,
+    requestSearch,
     responseError,
-    resultsPages,
+    resultsPageIndex,
+    samplesRowLimit,
   ]);
 
   const bootstrapping = !responseError && !resultsPages.size;
-
   const allowHTML = formData.allow_render_html ?? true;
 
   let tableContent = null;
   if (responseError) {
-    // Render error if page download failed
     tableContent = (
       <pre
         css={css`
@@ -299,26 +424,33 @@ export default function DrillDetailPane({
       </pre>
     );
   } else if (bootstrapping) {
-    // Render loading if first page hasn't loaded
     tableContent = <Loading />;
-  } else if (resultsPage?.total === 0) {
-    // Render empty state if no results are returned for page
-    const title = t('No rows were returned for this dataset');
-    tableContent = <EmptyState image="document.svg" title={title} />;
+  } else if (visibleTotal === 0) {
+    tableContent = (
+      <EmptyState
+        image="document.svg"
+        title={t('No rows were returned for this dataset')}
+      />
+    );
   } else {
-    // Render table if at least one page has successfully loaded
     tableContent = (
       <Resizable>
         <Table
+          key={`${detailMode}-${pageLength}-${
+            detailMode === 'bounded_client' ? searchValue : ''
+          }`}
           data={data}
           columns={mappedColumns}
           size={TableSize.Small}
-          defaultPageSize={PAGE_SIZE}
-          recordCount={resultsPage?.total}
+          defaultPageSize={pageLength}
+          recordCount={detailMode === 'server' ? resultsPage?.total : undefined}
           usePagination
           loading={isLoading}
-          onChange={pagination =>
-            setPageIndex(pagination.current ? pagination.current - 1 : 0)
+          onChange={
+            detailMode === 'server'
+              ? pagination =>
+                  setPageIndex(pagination.current ? pagination.current - 1 : 0)
+              : undefined
           }
           resizable
           virtualize
@@ -330,12 +462,51 @@ export default function DrillDetailPane({
 
   return (
     <>
+      {includeSearch && (
+        <div
+          css={css`
+            display: flex;
+            gap: ${theme.sizeUnit * 2}px;
+            margin-bottom: ${theme.sizeUnit * 2}px;
+          `}
+        >
+          {detailMode === 'server' && (
+            <Select
+              ariaLabel={t('Drill detail search column')}
+              value={searchColumn || undefined}
+              options={textSearchColumns.map(column => ({
+                label:
+                  dataset?.verbose_map?.[column.column_name] ||
+                  column.column_name,
+                value: column.column_name,
+              }))}
+              onChange={handleSearchColumnChange}
+              disabled={!textSearchColumns.length}
+              css={css`
+                min-width: 180px;
+              `}
+            />
+          )}
+          <Input
+            aria-label={t('Drill detail search')}
+            allowClear
+            disabled={detailMode === 'server' && !searchColumn}
+            placeholder={
+              detailMode === 'server'
+                ? t('Search by prefix')
+                : t('Search all columns')
+            }
+            value={searchValue}
+            onChange={event => handleSearchValueChange(event.target.value)}
+          />
+        </div>
+      )}
       {!bootstrapping && metadataBarComponent}
       {!bootstrapping && (
         <TableControls
           filters={filters}
-          setFilters={setFilters}
-          totalCount={resultsPage?.total}
+          setFilters={handleFiltersChange}
+          totalCount={visibleTotal}
           loading={isLoading}
           onReload={handleReload}
         />
