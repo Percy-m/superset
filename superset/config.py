@@ -565,6 +565,9 @@ DEFAULT_FEATURE_FLAGS: dict[str, bool] = {
     # Enables configurable pagination and search for Table drill detail
     # @lifecycle: development
     "DRILL_DETAIL_CONFIGURABLE_TABLE": False,
+    # Enables server-validated alert color filters for the classic Table chart
+    # @lifecycle: development
+    "TABLE_ALERT_FILTERS": False,
     # Enables advanced data type support
     # @lifecycle: development
     "ENABLE_ADVANCED_DATA_TYPES": False,

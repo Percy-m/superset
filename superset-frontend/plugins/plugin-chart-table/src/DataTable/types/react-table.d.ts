@@ -122,6 +122,7 @@ interface TableOwnState {
   sortColumn?: string;
   sortOrder?: 'asc' | 'desc';
   searchText?: string;
+  alertFilters?: import('../../types').TableAlertFilterSelection[];
 
   clientView?: ClientViewSnapshot;
 }

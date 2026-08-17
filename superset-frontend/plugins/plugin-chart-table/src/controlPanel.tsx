@@ -847,6 +847,28 @@ const config: ControlPanelConfig = {
                   : (explore?.datasource?.columns ?? {});
                 const timeCompareValue = explore?.controls?.time_compare?.value;
                 const hasTimeComparison = !isEmpty(timeCompareValue);
+                const physicalGroupby = new Set(
+                  ensureIsArray(explore?.controls?.groupby?.value).filter(
+                    (column): column is string => typeof column === 'string',
+                  ),
+                );
+                const savedMetricNames = new Set(
+                  ensureIsArray(explore?.controls?.metrics?.value).filter(
+                    (metric): metric is string => typeof metric === 'string',
+                  ),
+                );
+                const getSubjectRef = (columnName: string) => {
+                  if (physicalGroupby.has(columnName)) {
+                    return {
+                      kind: 'physical_column' as const,
+                      key: columnName,
+                    };
+                  }
+                  if (savedMetricNames.has(columnName)) {
+                    return { kind: 'saved_metric' as const, key: columnName };
+                  }
+                  return undefined;
+                };
 
                 const extraColorChoices = hasTimeComparison
                   ? [
@@ -902,6 +924,7 @@ const config: ControlPanelConfig = {
                             ? colname
                             : (verboseMap[colname] ?? colname),
                           dataType: coltypes[index],
+                          subjectRef: getSubjectRef(colname),
                         })),
                       ]
                     : [];
@@ -920,6 +943,7 @@ const config: ControlPanelConfig = {
                               ? colname
                               : (verboseMap[colname] ?? colname),
                             dataType: coltypes[index],
+                            subjectRef: getSubjectRef(colname),
                           });
                         }
                         return acc;

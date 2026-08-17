@@ -31,6 +31,7 @@ import {
 } from '@superset-ui/core/spec';
 import { cloneDeep } from 'lodash';
 import {
+  FeatureFlag,
   QueryMode,
   TimeGranularity,
   SMART_DATE_ID,
@@ -74,6 +75,65 @@ const expectValidAriaLabels = (container: HTMLElement) => {
 
 test('sanitizeHeaderId should sanitize percent sign', () => {
   expect(sanitizeHeaderId('%pct_nice')).toBe('percentpct_nice');
+});
+
+test('table header alert menu updates ownState and resets server pagination', async () => {
+  const previousFlags = window.featureFlags;
+  window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
+  const setDataMask = jest.fn();
+  try {
+    const props = transformProps({
+      ...testData.advanced,
+      ownState: { currentPage: 4, pageSize: 25 },
+      hooks: {
+        ...testData.advanced.hooks,
+        setDataMask,
+      },
+      rawFormData: {
+        ...testData.advanced.rawFormData,
+        conditional_formatting: [
+          {
+            ruleId: '772a548e-72f7-4ac8-a8ff-fdb7465b3ccd',
+            subjectRef: { kind: 'saved_metric', key: 'sum__num' },
+            alertLevel: 'RED',
+            filterable: true,
+            column: 'sum__num',
+            operator: '>',
+            targetValue: 100,
+            colorScheme: '#f00',
+            useGradient: false,
+          },
+        ],
+      },
+    });
+    render(
+      <ProviderWrapper>
+        <TableChart {...props} sticky={false} />
+      </ProviderWrapper>,
+    );
+
+    fireEvent.click(
+      screen.getByLabelText('Filter by alert level for sum__num'),
+    );
+    fireEvent.click(await screen.findByText('RED'));
+
+    await waitFor(() => {
+      expect(setDataMask).toHaveBeenLastCalledWith({
+        ownState: {
+          currentPage: 0,
+          pageSize: 25,
+          alertFilters: [
+            {
+              ruleId: '772a548e-72f7-4ac8-a8ff-fdb7465b3ccd',
+              level: 'RED',
+            },
+          ],
+        },
+      });
+    });
+  } finally {
+    window.featureFlags = previousFlags;
+  }
 });
 
 test('sanitizeHeaderId should sanitize hash/pound sign', () => {

@@ -22,8 +22,13 @@ import {
   fireEvent,
   waitFor,
 } from 'spec/helpers/testing-library';
-import { Comparator, ColorSchemeEnum } from '@superset-ui/chart-controls';
+import {
+  Comparator,
+  ColorSchemeEnum,
+  ObjectFormattingEnum,
+} from '@superset-ui/chart-controls';
 import { GenericDataType } from '@apache-superset/core/common';
+import { FeatureFlag } from '@superset-ui/core';
 import { FormattingPopoverContent } from './FormattingPopoverContent';
 
 const mockOnChange = jest.fn();
@@ -306,4 +311,131 @@ test('should hide formatting fields when color scheme is Green', async () => {
     expect(screen.queryByText('Formatting column')).not.toBeInTheDocument();
     expect(screen.queryByText('Formatting object')).not.toBeInTheDocument();
   });
+});
+
+test('saves a stable UUID and trusted subject metadata for an alert rule', async () => {
+  const previousFlags = window.featureFlags;
+  window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
+  const onChange = jest.fn();
+  try {
+    render(
+      <FormattingPopoverContent
+        config={{
+          ruleId: '772a548e-72f7-4ac8-a8ff-fdb7465b3ccd',
+          column: 'gross_revenue',
+          colorScheme: '#f00',
+          operator: Comparator.NotEqual,
+          targetValue: 10,
+          useGradient: false,
+          filterable: true,
+          alertLevel: 'RED',
+        }}
+        columns={[
+          {
+            label: 'Gross revenue',
+            value: 'gross_revenue',
+            dataType: GenericDataType.Numeric,
+            subjectRef: { kind: 'saved_metric', key: 'gross_revenue' },
+          },
+        ]}
+        onChange={onChange}
+      />,
+    );
+
+    expect(screen.getByText('Enable alert filter')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Apply'));
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    expect(onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        ruleId: '772a548e-72f7-4ac8-a8ff-fdb7465b3ccd',
+        subjectRef: { kind: 'saved_metric', key: 'gross_revenue' },
+        alertLevel: 'RED',
+        filterable: true,
+      }),
+    );
+  } finally {
+    window.featureFlags = previousFlags;
+  }
+});
+
+test('keeps Cell Bar formatting independent from alert filtering', async () => {
+  const previousFlags = window.featureFlags;
+  window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
+  const onChange = jest.fn();
+  try {
+    render(
+      <FormattingPopoverContent
+        config={{
+          column: 'gross_revenue',
+          colorScheme: '#f00',
+          operator: Comparator.GreaterThan,
+          targetValue: 10,
+          useGradient: false,
+          objectFormatting: ObjectFormattingEnum.CELL_BAR,
+          filterable: true,
+          alertLevel: 'RED',
+        }}
+        columns={[
+          {
+            label: 'Gross revenue',
+            value: 'gross_revenue',
+            dataType: GenericDataType.Numeric,
+            subjectRef: { kind: 'saved_metric', key: 'gross_revenue' },
+          },
+        ]}
+        onChange={onChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('Apply'));
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    expect(onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        subjectRef: { kind: 'saved_metric', key: 'gross_revenue' },
+        filterable: false,
+      }),
+    );
+    expect(onChange.mock.calls.at(-1)?.[0].ruleId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+  } finally {
+    window.featureFlags = previousFlags;
+  }
+});
+
+test('does not add alert rule metadata while the feature flag is disabled', async () => {
+  const previousFlags = window.featureFlags;
+  window.featureFlags = { [FeatureFlag.TableAlertFilters]: false };
+  const onChange = jest.fn();
+  try {
+    render(
+      <FormattingPopoverContent
+        config={{
+          column: 'gross_revenue',
+          colorScheme: '#f00',
+          operator: Comparator.GreaterThan,
+          targetValue: 10,
+        }}
+        columns={[
+          {
+            label: 'Gross revenue',
+            value: 'gross_revenue',
+            dataType: GenericDataType.Numeric,
+            subjectRef: { kind: 'saved_metric', key: 'gross_revenue' },
+          },
+        ]}
+        onChange={onChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByText('Apply'));
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    const savedRule = onChange.mock.calls.at(-1)?.[0];
+    expect(savedRule).not.toHaveProperty('ruleId');
+    expect(savedRule).not.toHaveProperty('subjectRef');
+    expect(savedRule).not.toHaveProperty('filterable');
+    expect(screen.queryByText('Enable alert filter')).not.toBeInTheDocument();
+  } finally {
+    window.featureFlags = previousFlags;
+  }
 });

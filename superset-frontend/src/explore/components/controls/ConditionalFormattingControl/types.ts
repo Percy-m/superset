@@ -20,6 +20,8 @@
 import { ReactNode } from 'react';
 import { PopoverProps } from '@superset-ui/core/components/Popover';
 import {
+  AlertLevel,
+  AlertSubjectRef,
   Comparator,
   ControlComponentProps,
   ObjectFormattingEnum,
@@ -27,6 +29,10 @@ import {
 import { GenericDataType } from '@apache-superset/core/common';
 
 export type ConditionalFormattingConfig = {
+  ruleId?: string;
+  subjectRef?: AlertSubjectRef;
+  alertLevel?: AlertLevel;
+  filterable?: boolean;
   operator?: Comparator;
   targetValue?: number;
   targetValueLeft?: number;
@@ -66,4 +72,5 @@ export interface ColumnOption {
   label: string;
   value: string;
   dataType: GenericDataType;
+  subjectRef?: AlertSubjectRef;
 }

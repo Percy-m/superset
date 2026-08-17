@@ -1040,6 +1040,16 @@ class ChartDataExtrasSchema(Schema):
     )
 
 
+class TableAlertFilterSchema(Schema):
+    """A client reference to a server-owned Table formatting rule."""
+
+    rule_id = fields.UUID(required=True)
+    level = fields.String(
+        required=True,
+        validate=validate.OneOf(choices=("RED", "YELLOW", "GREEN")),
+    )
+
+
 class AnnotationLayerSchema(Schema):
     annotationType = fields.String(  # noqa: N815
         metadata={"description": "Type of annotation layer"},
@@ -1395,6 +1405,12 @@ class ChartDataQueryObjectSchema(Schema):
         metadata={"description": "Should the rowcount of the actual query be returned"},
         allow_none=True,
     )
+    alert_filters = fields.List(
+        fields.Nested(TableAlertFilterSchema),
+        validate=Length(max=50),
+        allow_none=True,
+    )
+    is_table_alert_totals = fields.Boolean(allow_none=True)
     time_offsets = fields.List(
         fields.String(),
         allow_none=True,

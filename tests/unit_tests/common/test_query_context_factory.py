@@ -18,6 +18,11 @@ from unittest.mock import Mock, patch
 
 from superset.common.query_context_factory import QueryContextFactory
 from superset.common.query_object import QueryObject
+from superset.common.table_alerts import (
+    ALERT_FILTER_FINGERPRINT_EXTRA_KEY,
+    ALERT_FILTERS_EXTRA_KEY,
+    ALERT_TOTALS_EXTRA_KEY,
+)
 from superset.models.slice import Slice
 
 
@@ -32,6 +37,88 @@ class TestQueryContextFactory:
         result = self.factory._extract_tooltip_columns(form_data)
 
         assert result == ["column1", "column2", "column3"]
+
+    @patch("superset.common.query_context_factory.is_feature_enabled")
+    def test_resolve_table_alerts_ignores_references_when_disabled(
+        self, mock_is_feature_enabled
+    ):
+        """Feature-off behavior removes unsupported client-only fields."""
+        mock_is_feature_enabled.return_value = False
+        query = {
+            "columns": ["region"],
+            "alert_filters": [{"rule_id": "ignored", "level": "RED"}],
+            "is_table_alert_totals": True,
+        }
+
+        result = self.factory._resolve_table_alerts(query, None, None)
+
+        assert result == {"columns": ["region"]}
+        assert "alert_filters" in query
+        assert "is_table_alert_totals" in query
+
+    @patch("superset.common.query_context_factory.TableRuleResolver")
+    @patch("superset.common.query_context_factory.is_feature_enabled")
+    def test_resolve_table_alerts_adds_trusted_groups_and_cache_fingerprint(
+        self,
+        mock_is_feature_enabled,
+        mock_resolver_class,
+    ):
+        """Enabled references become canonical extras owned by the server."""
+        mock_is_feature_enabled.return_value = True
+        alert_groups = [
+            {
+                "kind": "saved_metric",
+                "key": "gross_revenue",
+                "rules": [
+                    {
+                        "rule_id": "772a548e-72f7-4ac8-a8ff-fdb7465b3ccd",
+                        "operator": "<",
+                        "target_value": "0",
+                    }
+                ],
+            }
+        ]
+        mock_resolver_class.return_value.resolve.return_value = (
+            alert_groups,
+            "rule-fingerprint",
+        )
+        slice_ = Mock(spec=Slice)
+        datasource = Mock()
+        datasource.columns = []
+        datasource.metrics = []
+        references = [
+            {
+                "rule_id": "772a548e-72f7-4ac8-a8ff-fdb7465b3ccd",
+                "level": "RED",
+            }
+        ]
+        query = {
+            "columns": ["region"],
+            "metrics": ["gross_revenue"],
+            "alert_filters": references,
+            "is_table_alert_totals": True,
+            "extras": {"where": ""},
+        }
+
+        result = self.factory._resolve_table_alerts(query, slice_, datasource)
+
+        mock_resolver_class.assert_called_once_with(slice_, datasource)
+        mock_resolver_class.return_value.resolve.assert_called_once_with(
+            references=references,
+            query={
+                "columns": ["region"],
+                "metrics": ["gross_revenue"],
+                "extras": {"where": ""},
+            },
+        )
+        assert result["extras"] == {
+            "where": "",
+            ALERT_FILTERS_EXTRA_KEY: alert_groups,
+            ALERT_FILTER_FINGERPRINT_EXTRA_KEY: "rule-fingerprint",
+            ALERT_TOTALS_EXTRA_KEY: True,
+        }
+        assert query["alert_filters"] == references
+        assert query["is_table_alert_totals"] is True
 
     def test_extract_tooltip_columns_dict_items(self):
         """Test _extract_tooltip_columns with dict items in tooltip_contents"""

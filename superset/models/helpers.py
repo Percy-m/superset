@@ -66,6 +66,13 @@ from sqlalchemy_utils import UUIDType
 from superset import db, is_feature_enabled
 from superset.advanced_data_type.types import AdvancedDataTypeResponse
 from superset.common.db_query_status import QueryStatus
+from superset.common.table_alerts import (
+    ALERT_FILTERS_EXTRA_KEY,
+    ALERT_TOTALS_EXTRA_KEY,
+    build_alert_group_clause,
+    INVALID_ALERT_RULE_MESSAGE,
+    ResolvedAlertGroup,
+)
 from superset.common.utils import dataframe_utils
 from superset.common.utils.time_range_utils import (
     get_since_until_from_query_object,
@@ -3275,6 +3282,31 @@ class ExploreMixin:  # pylint: disable=too-many-public-methods
                 )
                 having_clause_and += [Grouping(self.text(having))]
 
+            alert_groups = cast(
+                list[ResolvedAlertGroup], extras.get(ALERT_FILTERS_EXTRA_KEY, [])
+            )
+            for alert_group in alert_groups:
+                subject_key = alert_group["key"]
+                if alert_group["kind"] == "physical_column":
+                    alert_column = columns_by_name.get(subject_key)
+                    if alert_column is None:
+                        raise QueryObjectValidationError(INVALID_ALERT_RULE_MESSAGE)
+                    alert_subject = self.convert_tbl_column_to_sqla_col(
+                        alert_column, template_processor=template_processor
+                    )
+                    alert_target = where_clause_and
+                else:
+                    alert_metric = metrics_by_name.get(subject_key)
+                    if alert_metric is None:
+                        raise QueryObjectValidationError(INVALID_ALERT_RULE_MESSAGE)
+                    alert_subject = alert_metric.get_sqla_col(
+                        template_processor=template_processor
+                    )
+                    alert_target = having_clause_and
+                alert_target.append(
+                    build_alert_group_clause(alert_subject, alert_group["rules"])
+                )
+
         if apply_fetch_values_predicate and self.fetch_values_predicate:
             qry = qry.where(
                 self.get_fetch_values_predicate(template_processor=template_processor)
@@ -3484,6 +3516,22 @@ class ExploreMixin:  # pylint: disable=too-many-public-methods
                     qry = qry.where(top_groups)
 
         qry = qry.select_from(tbl)
+
+        if extras.get(ALERT_TOTALS_EXTRA_KEY):
+            if not db_engine_spec.allows_subqueries:
+                raise QueryObjectValidationError(
+                    _("Database does not support subqueries")
+                )
+            qualified_groups = qry.alias("table_alert_totals_qry")
+            total_exprs: list[ColumnElement] = []
+            for metric_expr in metrics_exprs:
+                metric_label = metric_expr.key
+                qualified_metric = qualified_groups.c.get(metric_label)
+                if qualified_metric is None:
+                    raise QueryObjectValidationError(INVALID_ALERT_RULE_MESSAGE)
+                total_exprs.append(sa.func.sum(qualified_metric).label(metric_label))
+            qry = sa.select(total_exprs).select_from(qualified_groups)
+            labels_expected = [metric.key for metric in metrics_exprs]
 
         if is_rowcount:
             if not db_engine_spec.allows_subqueries:

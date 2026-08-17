@@ -16,7 +16,12 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { QueryMode, TimeGranularity, VizType } from '@superset-ui/core';
+import {
+  FeatureFlag,
+  QueryMode,
+  TimeGranularity,
+  VizType,
+} from '@superset-ui/core';
 import buildQuery from '../src/buildQuery';
 import { TableChartFormData } from '../src/types';
 
@@ -280,4 +285,84 @@ describe('plugin-chart-table', () => {
       });
     });
   });
+});
+
+test('alert selections are attached to data and qualified totals queries', () => {
+  const previousFlags = window.featureFlags;
+  window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
+  try {
+    const { queries } = buildQuery(
+      {
+        ...basicFormData,
+        slice_id: 42,
+        query_mode: QueryMode.Aggregate,
+        groupby: ['category'],
+        metrics: ['gross_revenue'],
+        show_totals: true,
+      },
+      {
+        ownState: {
+          alertFilters: [
+            {
+              ruleId: '772a548e-72f7-4ac8-a8ff-fdb7465b3ccd',
+              level: 'RED',
+            },
+            {
+              ruleId: '772a548e-72f7-4ac8-a8ff-fdb7465b3ccd',
+              level: 'RED',
+            },
+          ],
+        },
+      },
+    );
+
+    expect(queries).toHaveLength(2);
+    expect(queries[0].alert_filters).toEqual([
+      {
+        rule_id: '772a548e-72f7-4ac8-a8ff-fdb7465b3ccd',
+        level: 'RED',
+      },
+    ]);
+    expect(queries[1]).toEqual(
+      expect.objectContaining({
+        alert_filters: queries[0].alert_filters,
+        columns: ['category'],
+        is_table_alert_totals: true,
+        row_limit: 0,
+        row_offset: 0,
+      }),
+    );
+  } finally {
+    window.featureFlags = previousFlags;
+  }
+});
+
+test('alert selections are omitted when the feature flag is disabled', () => {
+  const previousFlags = window.featureFlags;
+  window.featureFlags = { [FeatureFlag.TableAlertFilters]: false };
+  try {
+    const { queries } = buildQuery(
+      {
+        ...basicFormData,
+        slice_id: 42,
+        query_mode: QueryMode.Aggregate,
+        groupby: ['category'],
+        metrics: ['gross_revenue'],
+      },
+      {
+        ownState: {
+          alertFilters: [
+            {
+              ruleId: '772a548e-72f7-4ac8-a8ff-fdb7465b3ccd',
+              level: 'RED',
+            },
+          ],
+        },
+      },
+    );
+
+    expect(queries[0].alert_filters).toBeUndefined();
+  } finally {
+    window.featureFlags = previousFlags;
+  }
 });

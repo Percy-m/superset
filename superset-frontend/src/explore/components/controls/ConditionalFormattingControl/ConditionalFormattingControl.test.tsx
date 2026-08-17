@@ -16,9 +16,15 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { render, screen } from 'spec/helpers/testing-library';
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from 'spec/helpers/testing-library';
 import { Comparator } from '@superset-ui/chart-controls';
 import { GenericDataType } from '@apache-superset/core/common';
+import { FeatureFlag } from '@superset-ui/core';
 import ConditionalFormattingControl from './ConditionalFormattingControl';
 import { ConditionalFormattingConfig } from './types';
 
@@ -100,4 +106,41 @@ test('renders verbose column name when available', () => {
     />,
   );
   expect(screen.getByText('My Column is false')).toBeInTheDocument();
+});
+
+test('duplicating a formatter assigns a new stable rule UUID', async () => {
+  const previousFlags = window.featureFlags;
+  window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
+  const onChange = jest.fn();
+  const value: ConditionalFormattingConfig[] = [
+    {
+      ruleId: '772a548e-72f7-4ac8-a8ff-fdb7465b3ccd',
+      column: 'my_col',
+      operator: Comparator.IsFalse,
+      colorScheme: 'colorSuccess',
+    },
+  ];
+  try {
+    render(
+      <ConditionalFormattingControl
+        {...defaultProps}
+        onChange={onChange}
+        value={value}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText('Duplicate formatter'));
+
+    await waitFor(() => {
+      const latestValue = onChange.mock.calls.at(-1)?.[0];
+      expect(latestValue).toHaveLength(2);
+      expect(latestValue[0].ruleId).toBe(value[0].ruleId);
+      expect(latestValue[1].ruleId).not.toBe(value[0].ruleId);
+      expect(latestValue[1].ruleId).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      );
+    });
+  } finally {
+    window.featureFlags = previousFlags;
+  }
 });

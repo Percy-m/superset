@@ -63,6 +63,7 @@ export enum FeatureFlag {
   SqllabBackendPersistence = 'SQLLAB_BACKEND_PERSISTENCE',
   SqlValidatorsByEngine = 'SQL_VALIDATORS_BY_ENGINE',
   SshTunneling = 'SSH_TUNNELING',
+  TableAlertFilters = 'TABLE_ALERT_FILTERS',
   TaggingSystem = 'TAGGING_SYSTEM',
   Thumbnails = 'THUMBNAILS',
   UseAnalogousColors = 'USE_ANALOGOUS_COLORS',

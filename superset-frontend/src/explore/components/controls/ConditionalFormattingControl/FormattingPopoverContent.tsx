@@ -20,6 +20,8 @@ import { useMemo, useState, useEffect, useCallback } from 'react';
 import { t } from '@apache-superset/core/translation';
 import { styled } from '@apache-superset/core/theme';
 import { GenericDataType } from '@apache-superset/core/common';
+import { FeatureFlag, isFeatureEnabled } from '@superset-ui/core';
+import { v4 as uuidv4 } from 'uuid';
 import {
   Comparator,
   MultipleValueComparators,
@@ -94,6 +96,40 @@ const isOperatorNone = (operator?: Comparator) =>
   !operator || operator === Comparator.None;
 
 const rulesRequired = [{ required: true, message: t('Required') }];
+
+const alertFilterComparators = new Set<Comparator>([
+  Comparator.GreaterThan,
+  Comparator.LessThan,
+  Comparator.GreaterOrEqual,
+  Comparator.LessOrEqual,
+  Comparator.Equal,
+  Comparator.NotEqual,
+  ...MultipleValueComparators,
+]);
+
+const isFiniteTarget = (value: unknown) =>
+  typeof value === 'number' && Number.isFinite(value);
+
+const canFilterAlert = (
+  values: ConditionalFormattingConfig,
+  option?: ColumnOption,
+) => {
+  const hasValidTargets = isOperatorMultiValue(values.operator)
+    ? isFiniteTarget(values.targetValueLeft) &&
+      isFiniteTarget(values.targetValueRight) &&
+      Number(values.targetValueLeft) < Number(values.targetValueRight)
+    : isFiniteTarget(values.targetValue);
+
+  return Boolean(
+    option?.subjectRef &&
+    option.dataType === GenericDataType.Numeric &&
+    values.operator &&
+    alertFilterComparators.has(values.operator) &&
+    hasValidTargets &&
+    values.useGradient !== true &&
+    values.objectFormatting !== ObjectFormattingEnum.CELL_BAR,
+  );
+};
 
 type GetFieldValue = Pick<Required<FormProps>['form'], 'getFieldValue'>;
 const rulesTargetValueLeft = [
@@ -235,7 +271,7 @@ export const FormattingPopoverContent = ({
 }: {
   config?: ConditionalFormattingConfig;
   onChange: (config: ConditionalFormattingConfig) => void;
-  columns: { label: string; value: string; dataType: GenericDataType }[];
+  columns: ColumnOption[];
   extraColorChoices?: { label: string; value: string }[];
   allColumns?: ColumnOption[];
 }) => {
@@ -285,6 +321,30 @@ export const FormattingPopoverContent = ({
     () => columns.find(item => item.value === column)?.dataType,
     [columns, column],
   );
+  const alertFiltersEnabled = isFeatureEnabled(FeatureFlag.TableAlertFilters);
+  const selectedColumnOption = useMemo(
+    () => columns.find(item => item.value === column),
+    [column, columns],
+  );
+
+  const handleSubmit = (values: ConditionalFormattingConfig) => {
+    const submittedValues = { ...config, ...values };
+    if (!alertFiltersEnabled) {
+      onChange(submittedValues);
+      return;
+    }
+    const filterable = Boolean(
+      submittedValues.filterable &&
+      canFilterAlert(submittedValues, selectedColumnOption),
+    );
+    onChange({
+      ...submittedValues,
+      ruleId: config?.ruleId ?? uuidv4(),
+      filterable,
+      subjectRef: selectedColumnOption?.subjectRef,
+      alertLevel: filterable ? submittedValues.alertLevel : undefined,
+    });
+  };
 
   const handleColumnChange = (value: string) => {
     const newColumnType = columns.find(item => item.value === value)?.dataType;
@@ -368,7 +428,7 @@ export const FormattingPopoverContent = ({
   return (
     <Form
       form={form}
-      onFinish={onChange}
+      onFinish={handleSubmit}
       initialValues={config}
       requiredMark="optional"
       layout="vertical"
@@ -478,6 +538,40 @@ export const FormattingPopoverContent = ({
           </Row>
         )}
       </FormItem>
+      {alertFiltersEnabled && selectedColumnOption?.subjectRef ? (
+        <Row gutter={12}>
+          <Col span={12}>
+            <FormItem
+              name="filterable"
+              valuePropName="checked"
+              initialValue={config?.filterable ?? false}
+            >
+              <Checkbox>{t('Enable alert filter')}</Checkbox>
+            </FormItem>
+          </Col>
+          <Col span={12}>
+            <FormItem
+              name="alertLevel"
+              label={t('Alert level')}
+              rules={[
+                ({ getFieldValue }: GetFieldValue) => ({
+                  required: Boolean(getFieldValue('filterable')),
+                  message: t('Required'),
+                }),
+              ]}
+            >
+              <Select
+                ariaLabel={t('Alert level')}
+                options={[
+                  { value: 'RED', label: t('Red') },
+                  { value: 'YELLOW', label: t('Yellow') },
+                  { value: 'GREEN', label: t('Green') },
+                ]}
+              />
+            </FormItem>
+          </Col>
+        </Row>
+      ) : null}
       <FormItem>
         <JustifyEnd>
           <Button htmlType="submit" buttonStyle="primary">

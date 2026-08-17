@@ -135,6 +135,51 @@ def test_chart_data_query_object_schema_time_grain_sqla_validation(
     assert result["extras"]["time_grain_sqla"] is None
 
 
+def test_chart_data_query_object_schema_validates_table_alert_references(
+    app_context: None,
+) -> None:
+    """Alert filters accept only UUID references and the three supported levels."""
+    schema = ChartDataQueryObjectSchema()
+    valid = schema.load(
+        {
+            "metrics": ["gross_revenue"],
+            "alert_filters": [
+                {
+                    "rule_id": "772a548e-72f7-4ac8-a8ff-fdb7465b3ccd",
+                    "level": "RED",
+                }
+            ],
+            "is_table_alert_totals": True,
+        }
+    )
+    assert str(valid["alert_filters"][0]["rule_id"]) == (
+        "772a548e-72f7-4ac8-a8ff-fdb7465b3ccd"
+    )
+    assert valid["is_table_alert_totals"] is True
+
+    with pytest.raises(ValidationError):
+        schema.load({"alert_filters": [{"rule_id": "not-a-uuid", "level": "PURPLE"}]})
+
+
+def test_chart_data_query_object_schema_limits_table_alert_references(
+    app_context: None,
+) -> None:
+    """A query cannot request more than fifty alert rules."""
+    schema = ChartDataQueryObjectSchema()
+    references = [
+        {
+            "rule_id": f"00000000-0000-4000-8000-{index:012d}",
+            "level": "RED",
+        }
+        for index in range(51)
+    ]
+
+    with pytest.raises(ValidationError) as exc_info:
+        schema.load({"alert_filters": references})
+
+    assert "alert_filters" in exc_info.value.messages
+
+
 @pytest.mark.parametrize(
     "app",
     [{"TIME_GRAIN_ADDONS": {"PT10M": "10 minutes"}}],

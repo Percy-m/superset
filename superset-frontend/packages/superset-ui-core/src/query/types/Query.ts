@@ -83,6 +83,13 @@ export type ResidualQueryObjectData = {
   [key: string]: unknown;
 };
 
+export type TableAlertLevel = 'RED' | 'YELLOW' | 'GREEN';
+
+export interface TableAlertFilterReference {
+  rule_id: string;
+  level: TableAlertLevel;
+}
+
 /**
  * Query object directly compatible with the new chart data API.
  * A stricter version of query form data.
@@ -121,6 +128,12 @@ export interface QueryObject
 
   /** Should the rowcount of the query be fetched */
   is_rowcount?: boolean;
+
+  /** References to server-owned classic Table conditional-formatting rules. */
+  alert_filters?: TableAlertFilterReference[];
+
+  /** Sum metrics over the alert-qualified grouped relation. */
+  is_table_alert_totals?: boolean;
 
   /** Free-form HAVING SQL, multiple clauses are concatenated by AND */
   having?: string;

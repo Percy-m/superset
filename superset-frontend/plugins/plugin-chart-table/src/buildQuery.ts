@@ -19,6 +19,7 @@
 import {
   AdhocColumn,
   BuildQuery,
+  FeatureFlag,
   PostProcessingRule,
   QueryFormOrderBy,
   QueryMode,
@@ -27,6 +28,7 @@ import {
   ensureIsArray,
   getMetricLabel,
   isPhysicalColumn,
+  isFeatureEnabled,
   removeDuplicates,
 } from '@superset-ui/core';
 
@@ -35,7 +37,11 @@ import {
   timeCompareOperator,
 } from '@superset-ui/chart-controls';
 import { isEmpty } from 'lodash';
-import { TableChartFormData } from './types';
+import {
+  TableAlertFilterSelection,
+  TableChartFormData,
+  TableChartOwnState,
+} from './types';
 import { updateTableOwnState } from './DataTable/utils/externalAPIs';
 
 /**
@@ -216,7 +222,26 @@ const buildQuery: BuildQuery<TableChartFormData> = (
     }
 
     const moreProps: Partial<QueryObject> = {};
-    const ownState = options?.ownState ?? {};
+    const ownState = (options?.ownState ?? {}) as TableChartOwnState;
+    const alertFilters = isFeatureEnabled(FeatureFlag.TableAlertFilters)
+      ? Array.from(
+          new Map(
+            (Array.isArray(ownState.alertFilters) ? ownState.alertFilters : [])
+              .filter(
+                (reference): reference is TableAlertFilterSelection =>
+                  typeof reference?.ruleId === 'string' &&
+                  ['RED', 'YELLOW', 'GREEN'].includes(reference.level),
+              )
+              .map(reference => [
+                `${reference.ruleId}:${reference.level}`,
+                {
+                  rule_id: reference.ruleId,
+                  level: reference.level,
+                },
+              ]),
+          ).values(),
+        ).slice(0, 50)
+      : [];
     // Build Query flag to check if its for either download as csv, excel or json
     const isDownloadQuery =
       ['csv', 'xlsx'].includes(formData?.result_format || '') ||
@@ -254,6 +279,7 @@ const buildQuery: BuildQuery<TableChartFormData> = (
       metrics,
       post_processing: postProcessing,
       time_offsets: timeOffsets,
+      ...(alertFilters.length ? { alert_filters: alertFilters } : {}),
       ...moreProps,
     };
 
@@ -305,13 +331,14 @@ const buildQuery: BuildQuery<TableChartFormData> = (
     ) {
       extraQueries.push({
         ...queryObject,
-        columns: [],
-        metrics: percentMetrics,
+        columns: alertFilters.length ? queryObject.columns : [],
+        metrics: alertFilters.length ? queryObject.metrics : percentMetrics,
         post_processing: [],
         row_limit: 0,
         row_offset: 0,
         orderby: [],
         is_timeseries: false,
+        ...(alertFilters.length ? { is_table_alert_totals: true } : {}),
       });
     }
 
@@ -322,12 +349,13 @@ const buildQuery: BuildQuery<TableChartFormData> = (
     ) {
       extraQueries.push({
         ...queryObject,
-        columns: [],
+        columns: alertFilters.length ? queryObject.columns : [],
         row_limit: 0,
         row_offset: 0,
         post_processing: [],
         order_desc: undefined,
         orderby: undefined,
+        ...(alertFilters.length ? { is_table_alert_totals: true } : {}),
       });
     }
 

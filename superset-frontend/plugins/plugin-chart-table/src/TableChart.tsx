@@ -61,7 +61,9 @@ import {
   Input,
   Space,
   RawAntdSelect as Select,
+  Button,
   Dropdown,
+  Icons,
   Tooltip,
 } from '@superset-ui/core/components';
 import {
@@ -75,6 +77,8 @@ import {
 import { isEmpty, debounce, isEqual } from 'lodash';
 import {
   ColorFormatters,
+  ConditionalFormattingConfig,
+  AlertLevel,
   getTextColorForBackground,
   ObjectFormattingEnum,
   ColorSchemeEnum,
@@ -333,6 +337,10 @@ export default function TableChart<D extends DataRecord = DataRecord>(
     filters,
     sticky = true, // whether to use sticky header
     columnColorFormatters,
+    alertFormattingRules = [],
+    alertFilters = [],
+    tableOwnState = {},
+    tableAlertFiltersEnabled = false,
     allowRearrangeColumns = false,
     allowRenderHtml = true,
     onContextMenu,
@@ -379,6 +387,110 @@ export default function TableChart<D extends DataRecord = DataRecord>(
   // recalculated totals to display when the search filter is applied (client-side pagination)
   const [displayedTotals, setDisplayedTotals] = useState<D | undefined>(totals);
   const theme = useTheme();
+
+  const renderAlertFilterDropdown = useCallback(
+    (columnKey: string) => {
+      if (!tableAlertFiltersEnabled) {
+        return null;
+      }
+      const rules = alertFormattingRules.filter(
+        (
+          rule,
+        ): rule is ConditionalFormattingConfig & {
+          ruleId: string;
+          alertLevel: AlertLevel;
+        } =>
+          rule.filterable === true &&
+          typeof rule.ruleId === 'string' &&
+          ['RED', 'YELLOW', 'GREEN'].includes(rule.alertLevel ?? '') &&
+          rule.subjectRef?.key === columnKey,
+      );
+      if (!rules.length) {
+        return null;
+      }
+
+      const levels: AlertLevel[] = ['RED', 'YELLOW', 'GREEN'];
+      const selectedKeys = levels.filter(level => {
+        const levelRules = rules.filter(rule => rule.alertLevel === level);
+        return (
+          levelRules.length > 0 &&
+          levelRules.every(rule =>
+            alertFilters.some(
+              selection =>
+                selection.ruleId === rule.ruleId && selection.level === level,
+            ),
+          )
+        );
+      });
+
+      return (
+        <Dropdown
+          trigger={['click']}
+          menu={{
+            multiple: true,
+            selectedKeys,
+            items: levels.map(level => ({
+              key: level,
+              label: level,
+              disabled: !rules.some(rule => rule.alertLevel === level),
+            })),
+            onClick: ({ key, domEvent }) => {
+              domEvent.stopPropagation();
+              const level = key as AlertLevel;
+              const levelRules = rules.filter(
+                rule => rule.alertLevel === level,
+              );
+              const levelRuleIds = new Set(levelRules.map(rule => rule.ruleId));
+              const allSelected = levelRules.every(rule =>
+                alertFilters.some(
+                  selection =>
+                    selection.ruleId === rule.ruleId &&
+                    selection.level === level,
+                ),
+              );
+              const remaining = alertFilters.filter(
+                selection =>
+                  !(
+                    levelRuleIds.has(selection.ruleId) &&
+                    selection.level === level
+                  ),
+              );
+              const nextAlertFilters = allSelected
+                ? remaining
+                : [
+                    ...remaining,
+                    ...levelRules.map(rule => ({
+                      ruleId: rule.ruleId,
+                      level,
+                    })),
+                  ].slice(0, 50);
+              updateTableOwnState(setDataMask, {
+                ...tableOwnState,
+                currentPage: 0,
+                alertFilters: nextAlertFilters,
+              });
+            },
+          }}
+        >
+          <Button
+            aria-label={t('Filter by alert level for %s', columnKey)}
+            buttonSize="xsmall"
+            buttonStyle={selectedKeys.length ? 'primary' : 'link'}
+            onClick={event => event.stopPropagation()}
+          >
+            <Icons.FilterOutlined iconSize="s" />
+          </Button>
+        </Dropdown>
+      );
+    },
+    [
+      alertFilters,
+      alertFormattingRules,
+      setDataMask,
+      tableAlertFiltersEnabled,
+      tableOwnState,
+    ],
+  );
 
   useEffect(() => {
     setDisplayedTotals(totals);
@@ -1229,6 +1341,7 @@ export default function TableChart<D extends DataRecord = DataRecord>(
             >
               <span data-column-name={col.id}>{displayLabel}</span>
               <SortIcon column={col} />
+              {renderAlertFilterDropdown(key)}
             </div>
           </th>
         ),
@@ -1290,6 +1403,7 @@ export default function TableChart<D extends DataRecord = DataRecord>(
       toggleFilter,
       handleContextMenu,
       allowRearrangeColumns,
+      renderAlertFilterDropdown,
     ],
   );
 

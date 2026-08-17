@@ -25,11 +25,13 @@ import {
   DataRecord,
   ensureIsArray,
   extractTimegrain,
+  FeatureFlag,
   getMetricLabel,
   getNumberFormatter,
   getTimeFormatter,
   getTimeFormatterForGranularity,
   isAdhocColumn,
+  isFeatureEnabled,
   normalizeCurrency,
   NumberFormats,
   QueryMode,
@@ -52,6 +54,7 @@ import {
   BasicColorFormatterType,
   DataColumnMeta,
   TableChartProps,
+  TableChartOwnState,
   TableChartTransformedProps,
   TableColumnConfig,
 } from './types';
@@ -512,6 +515,7 @@ const transformProps = (
     originalFormData,
     originalFormData.extra_form_data,
   );
+  const tableOwnState = (serverPaginationData ?? {}) as TableChartOwnState;
 
   const {
     align_pn: alignPositiveNegative = true,
@@ -795,6 +799,10 @@ const transformProps = (
     emitCrossFilters,
     onChangeFilter,
     columnColorFormatters,
+    alertFormattingRules: conditionalFormatting,
+    alertFilters: tableOwnState.alertFilters ?? [],
+    tableOwnState,
+    tableAlertFiltersEnabled: isFeatureEnabled(FeatureFlag.TableAlertFilters),
     timeGrain,
     allowRearrangeColumns,
     allowRenderHtml,

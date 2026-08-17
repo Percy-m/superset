@@ -20,7 +20,10 @@ import { useEffect, useState } from 'react';
 import { t } from '@apache-superset/core/translation';
 import { styled, css } from '@apache-superset/core/theme';
 import { Comparator } from '@superset-ui/chart-controls';
+import { FeatureFlag, isFeatureEnabled } from '@superset-ui/core';
+import { Button } from '@superset-ui/core/components';
 import { Icons } from '@superset-ui/core/components/Icons';
+import { v4 as uuidv4 } from 'uuid';
 import ControlHeader from 'src/explore/components/ControlHeader';
 import { FormattingPopover } from './FormattingPopover';
 import {
@@ -77,6 +80,7 @@ const ConditionalFormattingControl = ({
   allColumns,
   ...props
 }: ConditionalFormattingControlProps) => {
+  const alertFiltersEnabled = isFeatureEnabled(FeatureFlag.TableAlertFilters);
   const [conditionalFormattingConfigs, setConditionalFormattingConfigs] =
     useState<ConditionalFormattingConfig[]>(value ?? []);
 
@@ -117,6 +121,17 @@ const ConditionalFormattingControl = ({
     setConditionalFormattingConfigs(newConfigs);
   };
 
+  const onDuplicate = (index: number) => {
+    setConditionalFormattingConfigs(prevConfigs => {
+      const duplicate = { ...prevConfigs[index], ruleId: uuidv4() };
+      return [
+        ...prevConfigs.slice(0, index + 1),
+        duplicate,
+        ...prevConfigs.slice(index + 1),
+      ];
+    });
+  };
+
   const createLabel = ({
     column,
     operator,
@@ -155,6 +170,16 @@ const ConditionalFormattingControl = ({
             <CloseButton onClick={() => onDelete(index)}>
               <Icons.CloseOutlined iconSize="m" />
             </CloseButton>
+            {alertFiltersEnabled ? (
+              <Button
+                aria-label={t('Duplicate formatter')}
+                buttonSize="small"
+                buttonStyle="link"
+                onClick={() => onDuplicate(index)}
+              >
+                <Icons.CopyOutlined iconSize="m" />
+              </Button>
+            ) : null}
             <FormattingPopover
               title={t('Edit formatter')}
               config={config}
