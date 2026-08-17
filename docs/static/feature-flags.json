@@ -70,6 +70,12 @@
         "description": "Enable Superset extensions for custom functionality without modifying core"
       },
       {
+        "name": "LONG_SQL_POST_NAVIGATION",
+        "default": false,
+        "lifecycle": "development",
+        "description": "Sends SQL Lab new-window query navigation through a POST form body"
+      },
+      {
         "name": "MATRIXIFY",
         "default": false,
         "lifecycle": "development",

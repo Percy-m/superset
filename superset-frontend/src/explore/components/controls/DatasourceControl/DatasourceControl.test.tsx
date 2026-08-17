@@ -22,6 +22,7 @@ import { Route } from 'react-router-dom';
 import fetchMock from 'fetch-mock';
 import { DatasourceType, JsonObject, SupersetClient } from '@superset-ui/core';
 import {
+  fireEvent,
   render,
   screen,
   userEvent,
@@ -29,7 +30,8 @@ import {
 } from 'spec/helpers/testing-library';
 import { fallbackExploreInitialData } from 'src/explore/fixtures';
 import type { ColumnObject } from 'src/features/datasets/types';
-import DatasourceControl from '.';
+import * as sqlLabNavigation from 'src/SqlLab/utils/openSqlLabQuery';
+import { ThemedDatasourceControl as DatasourceControl } from '.';
 
 // Mock DatasourceEditor to avoid mounting the full 2,500+ line editor tree.
 // The heavy editor (CollectionTable, FilterableTable, DatabaseSelector, etc.)
@@ -131,6 +133,7 @@ const createProps = (
       changeDatasource: jest.fn(),
       setControlValue: jest.fn(),
     },
+    addDangerToast: jest.fn(),
     isEditable: true,
     user: {
       createdOn: '2021-04-27T18:12:38.952304',
@@ -353,6 +356,27 @@ test('Click on View in SQL Lab', async () => {
       },
     },
   );
+});
+
+test('Modifier-click on View in SQL Lab uses shared POST navigation', async () => {
+  const openSqlLabQuery = jest
+    .spyOn(sqlLabNavigation, 'openSqlLabQuery')
+    .mockResolvedValue(undefined);
+  render(<DatasourceControl {...createProps()} />, {
+    useRedux: true,
+    useRouter: true,
+  });
+  await userEvent.click(screen.getByTestId('datasource-menu-trigger'));
+
+  fireEvent.click(screen.getByText('View in SQL Lab'), { metaKey: true });
+
+  expect(openSqlLabQuery).toHaveBeenCalledWith({
+    requestedQuery: {
+      datasourceKey: `${mockDatasource.id}__${mockDatasource.type}`,
+      sql: mockDatasource.sql,
+    },
+    target: 'new-tab',
+  });
 });
 
 test('Should open a different menu when datasource=query', async () => {

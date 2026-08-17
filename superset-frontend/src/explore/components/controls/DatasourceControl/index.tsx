@@ -19,7 +19,7 @@
  */
 
 import React, { PureComponent } from 'react';
-import { DatasourceType, SupersetClient, Datasource } from '@superset-ui/core';
+import { DatasourceType, Datasource } from '@superset-ui/core';
 import { t } from '@apache-superset/core/translation';
 import {
   css,
@@ -53,8 +53,11 @@ import { ErrorMessageWithStackTrace } from 'src/components/ErrorMessage/ErrorMes
 import ViewQueryModalFooter from 'src/explore/components/controls/ViewQueryModalFooter';
 import ViewQuery from 'src/explore/components/controls/ViewQuery';
 import { SaveDatasetModal } from 'src/SqlLab/components/SaveDatasetModal';
-import { safeStringify } from 'src/utils/safeStringify';
 import { Link } from 'react-router-dom';
+import withToasts, {
+  ToastProps,
+} from 'src/components/MessageToasts/withToasts';
+import { openSqlLabQuery } from 'src/SqlLab/utils/openSqlLabQuery';
 
 // Extended Datasource interface with all properties used in this component
 interface ExtendedDatasource extends Datasource {
@@ -92,6 +95,7 @@ interface FormData {
 }
 
 interface DatasourceControlProps {
+  addDangerToast: ToastProps['addDangerToast'];
   actions: DatasourceControlActions;
   onChange?: () => void;
   value?: string | null;
@@ -323,11 +327,16 @@ class DatasourceControl extends PureComponent<
           const { datasource } = this.props;
           const payload = {
             datasourceKey: `${datasource.id}__${datasource.type}`,
-            sql: datasource.sql,
+            sql: datasource.sql || '',
           };
-          SupersetClient.postForm('/sqllab/', {
-            form_data: safeStringify(payload),
-          });
+          openSqlLabQuery({
+            requestedQuery: payload,
+            target: 'new-tab',
+          }).catch(() =>
+            this.props.addDangerToast(
+              t('Unable to open the query in SQL Lab.'),
+            ),
+          );
         }
         break;
 
@@ -623,8 +632,12 @@ class DatasourceControl extends PureComponent<
 }
 
 // withTheme injects the theme prop, so we need to cast the component type
-export default withTheme(
+export const ThemedDatasourceControl = withTheme(
   DatasourceControl as React.ComponentType<
     Omit<DatasourceControlProps, 'theme'>
   >,
 );
+
+export default withToasts(ThemedDatasourceControl) as React.ComponentType<
+  Omit<DatasourceControlProps, 'theme' | 'addDangerToast'>
+>;

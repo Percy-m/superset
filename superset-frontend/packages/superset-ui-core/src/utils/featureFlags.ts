@@ -60,6 +60,7 @@ export enum FeatureFlag {
   GlobalAsyncQueries = 'GLOBAL_ASYNC_QUERIES',
   GlobalTaskFramework = 'GLOBAL_TASK_FRAMEWORK',
   ListviewsDefaultCardView = 'LISTVIEWS_DEFAULT_CARD_VIEW',
+  LongSqlPostNavigation = 'LONG_SQL_POST_NAVIGATION',
   Matrixify = 'MATRIXIFY',
   ScheduledQueries = 'SCHEDULED_QUERIES',
   SqllabBackendPersistence = 'SQLLAB_BACKEND_PERSISTENCE',

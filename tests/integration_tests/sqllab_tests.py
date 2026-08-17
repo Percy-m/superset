@@ -259,6 +259,37 @@ class TestSqlLab(SupersetTestCase):
                 resp = self.client.get(endpoint)
                 assert 200 == resp.status_code
 
+    def test_sqllab_post_preserves_long_unicode_requested_query(self) -> None:
+        sql = (
+            "".join(  # noqa: S608 -- intentionally builds a transport fixture
+                f"-- line {index:03d} 测试🙂 \"quoted\" 'single' \\path\t{'x' * 20}\r\n"
+                for index in range(300)
+            )
+            + "SELECT count() FROM complex_sql_cases;"
+        )
+        requested_query = {"datasourceKey": "7__table", "sql": sql}
+        assert len(sql.split("\r\n")) == 301
+        assert len(sql) >= 12_000
+        assert len(sql.encode("utf-8")) >= 12_000
+        self.login(ADMIN_USERNAME)
+
+        with (
+            mock.patch.object(security_manager, "has_access", return_value=True),
+            mock.patch(
+                "superset.views.sqllab.SqllabView.render_app_template",
+                return_value="ok",
+            ) as render_app_template,
+        ):
+            response = self.client.post(
+                "/sqllab/",
+                data={"form_data": json.dumps(requested_query)},
+            )
+
+        assert response.status_code == 200
+        render_app_template.assert_called_once_with(
+            {"requested_query": requested_query}
+        )
+
     def test_sqllab_no_access(self):
         self.login(GAMMA_USERNAME)
         for endpoint in ("/sqllab/", "/sqllab/history/"):

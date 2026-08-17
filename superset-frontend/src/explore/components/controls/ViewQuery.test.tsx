@@ -17,6 +17,7 @@
  * under the License.
  */
 
+import type React from 'react';
 import {
   screen,
   render,
@@ -24,11 +25,14 @@ import {
   waitFor,
 } from 'spec/helpers/testing-library';
 import fetchMock from 'fetch-mock';
+import { FeatureFlag } from '@superset-ui/core';
 import copyTextToClipboard from 'src/utils/copy';
 import { RootState } from 'src/dashboard/types';
+import { openSqlLabQuery } from 'src/SqlLab/utils/openSqlLabQuery';
 import ViewQuery, { ViewQueryProps } from './ViewQuery';
 
 const mockHistoryPush = jest.fn();
+const mockAddDangerToast = jest.fn();
 jest.mock('react-router-dom', () => ({
   ...jest.requireActual('react-router-dom'),
   useHistory: () => ({
@@ -37,6 +41,23 @@ jest.mock('react-router-dom', () => ({
 }));
 
 jest.mock('src/utils/copy');
+jest.mock('src/SqlLab/utils/openSqlLabQuery', () => ({
+  openSqlLabQuery: jest.fn(),
+}));
+jest.mock('src/components/MessageToasts/withToasts', () => ({
+  __esModule: true,
+  default:
+    (Component: React.ComponentType) => (props: Record<string, unknown>) =>
+      require('react').createElement(Component, {
+        ...props,
+        addDangerToast: mockAddDangerToast,
+      }),
+  useToasts: () => ({ addDangerToast: mockAddDangerToast }),
+}));
+
+const mockOpenSqlLabQuery = openSqlLabQuery as jest.MockedFunction<
+  typeof openSqlLabQuery
+>;
 
 const mockState = (
   roles: Record<string, [string, string][]> = {
@@ -73,6 +94,8 @@ const formatSqlEndpoint = 'glob:*/api/v1/sqllab/format_sql/';
 const formattedSQL = 'SELECT * FROM table;';
 
 beforeEach(() => {
+  window.featureFlags = {};
+  mockOpenSqlLabQuery.mockResolvedValue(undefined);
   fetchMock.get(
     datasetApiEndpoint,
     {
@@ -96,6 +119,7 @@ beforeEach(() => {
 afterEach(() => {
   jest.resetAllMocks();
   fetchMock.clearHistory().removeRoutes();
+  window.featureFlags = {};
 });
 
 const getFormatSwitch = () =>
@@ -156,21 +180,22 @@ test('toggles back to formatted SQL when Format switch is clicked', async () => 
   await waitFor(() => expect(container).toHaveTextContent(formattedSQL));
 });
 
-test('navigates to SQL Lab when View in SQL Lab button is clicked', () => {
+test('navigates to SQL Lab through router state when the button is clicked', () => {
   setup(mockProps);
 
   const viewInSQLLabButton = screen.getByText('View in SQL Lab');
   fireEvent.click(viewInSQLLabButton);
 
-  expect(mockHistoryPush).toHaveBeenCalledWith({
-    pathname: '/sqllab',
-    state: {
+  expect(mockOpenSqlLabQuery).toHaveBeenCalledWith(
+    expect.objectContaining({
       requestedQuery: {
         datasourceKey: mockProps.datasource,
         sql: mockProps.sql,
       },
-    },
-  });
+      target: 'same-tab',
+      navigate: expect.any(Function),
+    }),
+  );
 });
 
 test('opens SQL Lab in a new tab when View in SQL Lab button is clicked with meta key', () => {
@@ -185,6 +210,40 @@ test('opens SQL Lab in a new tab when View in SQL Lab button is clicked with met
   expect(window.open).toHaveBeenCalledWith(
     `/sqllab?datasourceKey=${datasource}&sql=${encodeURIComponent(sql)}`,
     '_blank',
+  );
+});
+
+test('posts SQL Lab navigation when the long SQL feature is enabled', () => {
+  window.featureFlags = { [FeatureFlag.LongSqlPostNavigation]: true };
+  window.open = jest.fn();
+
+  setup(mockProps);
+  fireEvent.click(screen.getByText('View in SQL Lab'), { ctrlKey: true });
+
+  expect(mockOpenSqlLabQuery).toHaveBeenCalledWith({
+    requestedQuery: {
+      datasourceKey: mockProps.datasource,
+      sql: mockProps.sql,
+    },
+    target: 'new-tab',
+  });
+  expect(window.open).not.toHaveBeenCalled();
+});
+
+test('shows a generic error when POST navigation fails', async () => {
+  window.featureFlags = { [FeatureFlag.LongSqlPostNavigation]: true };
+  mockOpenSqlLabQuery.mockRejectedValue(new Error(mockProps.sql));
+
+  setup(mockProps);
+  fireEvent.click(screen.getByText('View in SQL Lab'), { metaKey: true });
+
+  await waitFor(() =>
+    expect(mockAddDangerToast).toHaveBeenCalledWith(
+      'Unable to open the query in SQL Lab.',
+    ),
+  );
+  expect(JSON.stringify(mockAddDangerToast.mock.calls)).not.toContain(
+    mockProps.sql,
   );
 });
 

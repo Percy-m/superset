@@ -19,9 +19,15 @@
 import { FC } from 'react';
 import { isObject } from 'lodash';
 import { t } from '@apache-superset/core/translation';
-import { SupersetClient } from '@superset-ui/core';
+import {
+  FeatureFlag,
+  isFeatureEnabled,
+  SupersetClient,
+} from '@superset-ui/core';
 import { Button } from '@superset-ui/core/components';
 import { useHistory } from 'react-router-dom';
+import { useToasts } from 'src/components/MessageToasts/withToasts';
+import { openSqlLabQuery } from 'src/SqlLab/utils/openSqlLabQuery';
 
 interface SimpleDataSource {
   id: string;
@@ -45,25 +51,34 @@ const ViewQueryModalFooter: FC<ViewQueryModalFooterProps> = (props: {
   datasource: SimpleDataSource;
 }) => {
   const history = useHistory();
+  const { addDangerToast } = useToasts();
   const viewInSQLLab = (
     openInNewWindow: boolean,
     id: string,
     type: string,
     sql: string,
   ) => {
-    const payload = {
+    const requestedQuery = {
       datasourceKey: `${id}__${type}`,
       sql,
     };
     if (openInNewWindow) {
-      SupersetClient.postForm('/sqllab/', payload);
+      if (isFeatureEnabled(FeatureFlag.LongSqlPostNavigation)) {
+        openSqlLabQuery({
+          requestedQuery,
+          target: 'new-tab',
+        }).catch(() =>
+          addDangerToast(t('Unable to open the query in SQL Lab.')),
+        );
+      } else {
+        SupersetClient.postForm('/sqllab/', requestedQuery);
+      }
     } else {
-      history.push({
-        pathname: '/sqllab',
-        state: {
-          requestedQuery: payload,
-        },
-      });
+      openSqlLabQuery({
+        requestedQuery,
+        target: 'same-tab',
+        navigate: location => history.push(location),
+      }).catch(() => addDangerToast(t('Unable to open the query in SQL Lab.')));
     }
   };
 
@@ -87,7 +102,7 @@ const ViewQueryModalFooter: FC<ViewQueryModalFooterProps> = (props: {
       </Button>
       <Button
         buttonStyle="secondary"
-        onClick={({ metaKey }) => openSQL(Boolean(metaKey))}
+        onClick={({ ctrlKey, metaKey }) => openSQL(metaKey || ctrlKey)}
       >
         {OPEN_IN_SQL_LAB}
       </Button>

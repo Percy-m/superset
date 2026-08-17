@@ -50,13 +50,12 @@ import { Logger, LOG_ACTIONS_LOAD_CHART } from 'src/logger/LogUtils';
 import { allowCrossDomain as domainShardingEnabled } from 'src/utils/hostNamesConfig';
 import { updateDataMask } from 'src/dataMask/actions';
 import { waitForAsyncData } from 'src/middleware/asyncEvent';
-import { ensureAppRoot } from 'src/utils/pathUtils';
-import { safeStringify } from 'src/utils/safeStringify';
 import { extendedDayjs } from '@superset-ui/core/utils/dates';
 import type { Dispatch, Action, AnyAction } from 'redux';
 import type { ThunkAction, ThunkDispatch } from 'redux-thunk';
 import type { History } from 'history';
 import type { ChartState } from 'src/explore/types';
+import { openSqlLabQuery } from 'src/SqlLab/utils/openSqlLabQuery';
 
 // Types for the Redux state
 export interface ChartsState {
@@ -939,24 +938,25 @@ export function redirectSQLLab(
       resultFormat: 'json',
       resultType: 'query',
     })
-      .then(({ json }) => {
+      .then(async ({ json }) => {
         if (!json.result || json.result.length === 0) {
           dispatch(addDangerToast(t('No SQL query found')));
           return;
         }
-        const redirectUrl = '/sqllab/';
         const payload = {
           datasourceKey: formData.datasource,
           sql: json.result[0].query,
         };
         if (history) {
-          // Use two-argument form for history.push with state
-          history.push(redirectUrl, {
+          await openSqlLabQuery({
             requestedQuery: payload,
+            target: 'same-tab',
+            navigate: location => history.push(location),
           });
         } else {
-          SupersetClient.postForm(ensureAppRoot(redirectUrl), {
-            form_data: safeStringify(payload),
+          await openSqlLabQuery({
+            requestedQuery: payload,
+            target: 'new-tab',
           });
         }
       })

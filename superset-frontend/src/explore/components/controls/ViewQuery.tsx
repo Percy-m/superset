@@ -27,7 +27,11 @@ import {
 import { useSelector } from 'react-redux';
 import rison from 'rison';
 import { t } from '@apache-superset/core/translation';
-import { SupersetClient } from '@superset-ui/core';
+import {
+  FeatureFlag,
+  isFeatureEnabled,
+  SupersetClient,
+} from '@superset-ui/core';
 import { styled, useTheme } from '@apache-superset/core/theme';
 import {
   Icons,
@@ -47,6 +51,8 @@ import CodeSyntaxHighlighter, {
 } from '@superset-ui/core/components/CodeSyntaxHighlighter';
 import { useHistory } from 'react-router-dom';
 import { ExplorePageState } from 'src/explore/types';
+import { useToasts } from 'src/components/MessageToasts/withToasts';
+import { openSqlLabQuery } from 'src/SqlLab/utils/openSqlLabQuery';
 
 export interface ViewQueryProps {
   sql: string;
@@ -85,6 +91,7 @@ const ViewQuery: FC<ViewQueryProps> = props => {
   const [formattedSQL, setFormattedSQL] = useState<string>();
   const [showFormatSQL, setShowFormatSQL] = useState(true);
   const history = useHistory();
+  const { addDangerToast } = useToasts();
   const currentSQL = (showFormatSQL ? formattedSQL : sql) ?? sql;
   const canAccessSQLLab = useSelector((state: RootState) =>
     findPermission('menu_access', 'SQL Lab', state.user?.roles),
@@ -138,6 +145,15 @@ const ViewQuery: FC<ViewQueryProps> = props => {
       };
       if (domEvent.metaKey || domEvent.ctrlKey) {
         domEvent.preventDefault();
+        if (isFeatureEnabled(FeatureFlag.LongSqlPostNavigation)) {
+          openSqlLabQuery({
+            requestedQuery,
+            target: 'new-tab',
+          }).catch(() =>
+            addDangerToast(t('Unable to open the query in SQL Lab.')),
+          );
+          return;
+        }
         window.open(
           makeUrl(
             `/sqllab?datasourceKey=${datasource}&sql=${encodeURIComponent(currentSQL)}`,
@@ -145,10 +161,16 @@ const ViewQuery: FC<ViewQueryProps> = props => {
           '_blank',
         );
       } else {
-        history.push({ pathname: '/sqllab', state: { requestedQuery } });
+        openSqlLabQuery({
+          requestedQuery,
+          target: 'same-tab',
+          navigate: location => history.push(location),
+        }).catch(() =>
+          addDangerToast(t('Unable to open the query in SQL Lab.')),
+        );
       }
     },
-    [history, datasource, currentSQL],
+    [addDangerToast, history, datasource, currentSQL],
   );
 
   useEffect(() => {

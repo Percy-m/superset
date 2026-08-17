@@ -564,6 +564,9 @@ DEFAULT_FEATURE_FLAGS: dict[str, bool] = {
     # Enables Dashboard Tab multi-sheet XLSX exports (requires STYLED_XLSX_EXPORT)
     # @lifecycle: development
     "DASHBOARD_TAB_XLSX_EXPORT": False,
+    # Sends SQL Lab new-window query navigation through a POST form body
+    # @lifecycle: development
+    "LONG_SQL_POST_NAVIGATION": False,
     # Allow metrics and columns to be grouped into folders in the chart builder
     # @lifecycle: development
     "DATASET_FOLDERS": False,
