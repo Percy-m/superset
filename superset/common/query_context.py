@@ -50,6 +50,7 @@ class QueryContext:
     form_data: dict[str, Any] | None
     result_type: ChartDataResultType
     result_format: ChartDataResultFormat
+    result_format_options: dict[str, Any]
     force: bool
     custom_cache_timeout: int | None
 
@@ -68,6 +69,7 @@ class QueryContext:
         form_data: dict[str, Any] | None,
         result_type: ChartDataResultType,
         result_format: ChartDataResultFormat,
+        result_format_options: dict[str, Any] | None = None,
         force: bool = False,
         custom_cache_timeout: int | None = None,
         cache_values: dict[str, Any],
@@ -76,6 +78,7 @@ class QueryContext:
         self.slice_ = slice_
         self.result_type = result_type
         self.result_format = result_format
+        self.result_format_options = result_format_options or {}
         self.queries = queries
         self.form_data = form_data
         self.force = force

@@ -1417,6 +1417,12 @@ class ChartDataQueryObjectSchema(Schema):
     )
 
 
+class ChartDataResultFormatOptionsSchema(Schema):
+    """Optional controls for a requested result representation."""
+
+    styled = fields.Boolean(load_default=False)
+
+
 class ChartDataQueryContextSchema(Schema):
     query_context_factory: QueryContextFactory | None = None
     datasource = fields.Nested(ChartDataDatasourceSchema)
@@ -1437,6 +1443,10 @@ class ChartDataQueryContextSchema(Schema):
 
     result_type = fields.Enum(ChartDataResultType, by_value=True)
     result_format = fields.Enum(ChartDataResultFormat, by_value=True)
+    result_format_options = fields.Nested(
+        ChartDataResultFormatOptionsSchema,
+        load_default=dict,
+    )
 
     form_data = fields.Raw(allow_none=True, required=False)
 

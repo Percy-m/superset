@@ -558,6 +558,12 @@ DEFAULT_FEATURE_FLAGS: dict[str, bool] = {
     # Enables sanitized cross-filter and Table alert state in dashboard permalinks
     # @lifecycle: development
     "DASHBOARD_CROSS_FILTER_PERMALINK": False,
+    # Enables server-resolved conditional formatting for Table XLSX exports
+    # @lifecycle: development
+    "STYLED_XLSX_EXPORT": False,
+    # Enables Dashboard Tab multi-sheet XLSX exports (requires STYLED_XLSX_EXPORT)
+    # @lifecycle: development
+    "DASHBOARD_TAB_XLSX_EXPORT": False,
     # Allow metrics and columns to be grouped into folders in the chart builder
     # @lifecycle: development
     "DATASET_FOLDERS": False,

@@ -17,7 +17,15 @@
 import re
 from typing import Any, Mapping, Union
 
-from marshmallow import fields, post_dump, post_load, pre_load, Schema
+from marshmallow import (
+    fields,
+    post_dump,
+    post_load,
+    pre_load,
+    RAISE,
+    Schema,
+    validates_schema,
+)
 from marshmallow.validate import Length, ValidationError
 
 from superset import security_manager
@@ -486,6 +494,35 @@ class DashboardScreenshotPostSchema(Schema):
         ),
         metadata={"description": "A list of tuples, each containing two strings."},
     )
+
+
+class DashboardXlsxExportSchema(Schema):
+    """Validate the untrusted selected Tabs and Dashboard interaction state."""
+
+    class Meta:
+        unknown = RAISE
+
+    tabIds = fields.List(  # noqa: N815
+        fields.String(validate=Length(min=1, max=512)),
+        required=True,
+        validate=Length(min=1, max=100),
+    )
+    dataMask = fields.Dict(  # noqa: N815
+        keys=fields.String(validate=Length(min=1, max=512)),
+        values=fields.Raw(),
+        load_default=dict,
+    )
+
+    @validates_schema
+    def validate_unique_tabs(
+        self,
+        data: dict[str, Any],
+        **kwargs: Any,
+    ) -> None:
+        """Reject duplicate Tab IDs instead of silently changing request intent."""
+        tab_ids = data["tabIds"]
+        if len(tab_ids) != len(set(tab_ids)):
+            raise ValidationError("tabIds must not contain duplicate values")
 
 
 class ChartFavStarResponseResult(Schema):

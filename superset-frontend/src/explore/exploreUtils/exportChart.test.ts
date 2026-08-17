@@ -16,7 +16,8 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { exportChart } from '.';
+import { FeatureFlag } from '@superset-ui/core';
+import { buildV1ChartDataPayload, exportChart } from '.';
 
 // Mock pathUtils to control app root prefix
 jest.mock('src/utils/pathUtils', () => ({
@@ -40,7 +41,8 @@ jest.mock('@superset-ui/core', () => ({
 }));
 
 const { ensureAppRoot } = jest.requireMock('src/utils/pathUtils');
-const { getChartMetadataRegistry } = jest.requireMock('@superset-ui/core');
+const { getChartBuildQueryRegistry, getChartMetadataRegistry } =
+  jest.requireMock('@superset-ui/core');
 
 // Minimal formData that won't trigger legacy API (useLegacyApi = false)
 const baseFormData = {
@@ -56,6 +58,59 @@ beforeEach(() => {
   getChartMetadataRegistry.mockReturnValue({
     get: jest.fn().mockReturnValue({ parseMethod: 'json' }),
   });
+  window.featureFlags = {};
+});
+
+test('saved classic Table XLSX requests server-owned styles when enabled', async () => {
+  window.featureFlags = { [FeatureFlag.StyledXlsxExport]: true };
+  const queryContext = {
+    datasource: { id: 1, type: 'table' },
+    force: false,
+    result_type: 'results',
+    result_format: 'xlsx',
+    queries: [],
+  };
+  getChartBuildQueryRegistry.mockReturnValue({
+    get: jest.fn().mockReturnValue(jest.fn().mockReturnValue(queryContext)),
+  });
+
+  const payload = await buildV1ChartDataPayload({
+    formData: { ...baseFormData, slice_id: 7 },
+    resultFormat: 'xlsx',
+    resultType: 'results',
+  });
+
+  expect(payload.result_format_options).toEqual({ styled: true });
+});
+
+test.each([
+  ['feature disabled', { ...baseFormData, slice_id: 7 }, {}],
+  ['unsaved Table', baseFormData, { [FeatureFlag.StyledXlsxExport]: true }],
+  [
+    'non-Table chart',
+    { ...baseFormData, slice_id: 7, viz_type: 'pie' },
+    { [FeatureFlag.StyledXlsxExport]: true },
+  ],
+])('%s does not request styled XLSX', async (_name, formData, featureFlags) => {
+  window.featureFlags = featureFlags;
+  const queryContext = {
+    datasource: { id: 1, type: 'table' },
+    force: false,
+    result_type: 'results',
+    result_format: 'xlsx',
+    queries: [],
+  };
+  getChartBuildQueryRegistry.mockReturnValue({
+    get: jest.fn().mockReturnValue(jest.fn().mockReturnValue(queryContext)),
+  });
+
+  const payload = await buildV1ChartDataPayload({
+    formData,
+    resultFormat: 'xlsx',
+    resultType: 'results',
+  });
+
+  expect(payload.result_format_options).toBeUndefined();
 });
 
 // Tests for exportChart URL prefix handling in streaming export

@@ -34,6 +34,12 @@
         "description": "Enables sanitized cross-filter and Table alert state in dashboard permalinks"
       },
       {
+        "name": "DASHBOARD_TAB_XLSX_EXPORT",
+        "default": false,
+        "lifecycle": "development",
+        "description": "Enables Dashboard Tab multi-sheet XLSX exports (requires STYLED_XLSX_EXPORT)"
+      },
+      {
         "name": "DATASET_FOLDERS",
         "default": false,
         "lifecycle": "development",
@@ -80,6 +86,12 @@
         "default": false,
         "lifecycle": "development",
         "description": "Expand nested types in Presto into extra columns/arrays. Experimental, doesn't work with all nested types."
+      },
+      {
+        "name": "STYLED_XLSX_EXPORT",
+        "default": false,
+        "lifecycle": "development",
+        "description": "Enables server-resolved conditional formatting for Table XLSX exports"
       },
       {
         "name": "TABLE_ALERT_FILTERS",

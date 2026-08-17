@@ -181,6 +181,10 @@ export interface QueryContext {
   result_type: string;
   /** Response format */
   result_format: string;
+  /** Optional server-owned controls for the requested result representation. */
+  result_format_options?: {
+    styled?: boolean;
+  };
   queries: QueryObject[];
   form_data?: QueryFormData;
 }

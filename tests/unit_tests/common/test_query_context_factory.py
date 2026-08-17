@@ -16,6 +16,9 @@
 # under the License.
 from unittest.mock import Mock, patch
 
+import pytest
+
+from superset.common.chart_data import ChartDataResultFormat
 from superset.common.query_context_factory import QueryContextFactory
 from superset.common.query_object import QueryObject
 from superset.common.table_alerts import (
@@ -23,6 +26,7 @@ from superset.common.table_alerts import (
     ALERT_FILTERS_EXTRA_KEY,
     ALERT_TOTALS_EXTRA_KEY,
 )
+from superset.exceptions import QueryObjectValidationError
 from superset.models.slice import Slice
 
 
@@ -37,6 +41,45 @@ class TestQueryContextFactory:
         result = self.factory._extract_tooltip_columns(form_data)
 
         assert result == ["column1", "column2", "column3"]
+
+    @patch("superset.common.query_context_factory.is_feature_enabled")
+    def test_styled_xlsx_requires_matching_saved_classic_table(
+        self, mock_is_feature_enabled
+    ):
+        """Only a matching saved classic Table can request server-owned styles."""
+        mock_is_feature_enabled.return_value = True
+        slice_ = Slice(
+            id=9,
+            viz_type="table",
+            datasource_type="table",
+            datasource_id=7,
+        )
+        datasource = Mock(id=7)
+
+        with patch.object(self.factory, "_convert_to_model", return_value=datasource):
+            query_context = self.factory.create(
+                current_slice=slice_,
+                datasource={"id": 7, "type": "table"},
+                queries=[],
+                form_data={"slice_id": 9},
+                result_format=ChartDataResultFormat.XLSX,
+                result_format_options={"styled": True},
+            )
+            assert query_context.result_format_options == {"styled": True}
+
+            slice_.viz_type = "pie"
+            with pytest.raises(
+                QueryObjectValidationError,
+                match="STYLED_XLSX_UNSUPPORTED",
+            ):
+                self.factory.create(
+                    current_slice=slice_,
+                    datasource={"id": 7, "type": "table"},
+                    queries=[],
+                    form_data={"slice_id": 9},
+                    result_format=ChartDataResultFormat.XLSX,
+                    result_format_options={"styled": True},
+                )
 
     @patch("superset.common.query_context_factory.is_feature_enabled")
     def test_resolve_table_alerts_ignores_references_when_disabled(

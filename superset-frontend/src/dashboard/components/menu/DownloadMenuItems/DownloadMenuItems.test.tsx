@@ -24,7 +24,9 @@ import {
   waitFor,
 } from 'spec/helpers/testing-library';
 import { Menu, MenuItem } from '@superset-ui/core/components/Menu';
-import { SupersetClient } from '@superset-ui/core';
+import { FeatureFlag, SupersetClient } from '@superset-ui/core';
+import { DASHBOARD_ROOT_ID } from 'src/dashboard/util/constants';
+import { TAB_TYPE, TABS_TYPE } from 'src/dashboard/util/componentTypes';
 import { useDownloadMenuItems } from '.';
 
 const mockAddSuccessToast = jest.fn();
@@ -43,6 +45,7 @@ jest.mock('@superset-ui/core', () => ({
   ...jest.requireActual('@superset-ui/core'),
   SupersetClient: {
     get: jest.fn(),
+    post: jest.fn(),
   },
 }));
 
@@ -70,11 +73,13 @@ const originalRevokeObjectURL = window.URL.revokeObjectURL;
 
 beforeEach(() => {
   jest.clearAllMocks();
+  window.featureFlags = {};
 });
 
 afterEach(() => {
   window.URL.createObjectURL = originalCreateObjectURL;
   window.URL.revokeObjectURL = originalRevokeObjectURL;
+  window.featureFlags = {};
 });
 
 test('Should render all menu items', () => {
@@ -135,4 +140,91 @@ test('Export as Example shows error toast on failure', async () => {
       'Sorry, something went wrong. Try again later.',
     );
   });
+});
+
+test('styled Tab XLSX export posts selected tabs and dashboard state', async () => {
+  window.featureFlags = {
+    [FeatureFlag.StyledXlsxExport]: true,
+    [FeatureFlag.DashboardTabXlsxExport]: true,
+  };
+  const mockBlob = new Blob(['xlsx'], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+  mockSupersetClient.post.mockResolvedValue({
+    blob: jest.fn().mockResolvedValue(mockBlob),
+    headers: new Headers({
+      'Content-Disposition': 'attachment; filename="dashboard_123.xlsx"',
+    }),
+  } as unknown as Response);
+  const createObjectURL = jest.fn(() => 'blob:http://localhost/xlsx');
+  const revokeObjectURL = jest.fn();
+  window.URL.createObjectURL = createObjectURL;
+  window.URL.revokeObjectURL = revokeObjectURL;
+
+  render(<MenuWrapper />, {
+    useRedux: true,
+    initialState: {
+      dashboardLayout: {
+        past: [],
+        future: [],
+        present: {
+          [DASHBOARD_ROOT_ID]: {
+            id: DASHBOARD_ROOT_ID,
+            type: 'ROOT',
+            meta: {},
+            children: ['TABS-main'],
+          },
+          'TABS-main': {
+            id: 'TABS-main',
+            type: TABS_TYPE,
+            meta: {},
+            children: ['TAB-a', 'TAB-b'],
+          },
+          'TAB-a': {
+            id: 'TAB-a',
+            type: TAB_TYPE,
+            meta: { text: 'Quality Overview' },
+            children: [],
+          },
+          'TAB-b': {
+            id: 'TAB-b',
+            type: TAB_TYPE,
+            meta: { text: 'Exceptions' },
+            children: [],
+          },
+        },
+      },
+      dashboardState: { activeTabs: ['TAB-a'] },
+      dataMask: { 3: { id: '3', ownState: { alertFilters: [] } } },
+    },
+  });
+
+  await userEvent.click(screen.getByText('Export tabs to Excel'));
+  expect(
+    screen.getByText('Export dashboard tabs to Excel'),
+  ).toBeInTheDocument();
+  expect(screen.getByLabelText('Quality Overview')).toBeChecked();
+  await userEvent.click(screen.getByLabelText('Exceptions'));
+  await userEvent.click(screen.getByRole('button', { name: 'Export' }));
+
+  await waitFor(() => {
+    expect(mockSupersetClient.post).toHaveBeenCalledWith({
+      endpoint: '/api/v1/dashboard/123/export_xlsx/',
+      headers: {
+        Accept:
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        tabIds: ['TAB-a', 'TAB-b'],
+        dataMask: { 3: { id: '3', ownState: { alertFilters: [] } } },
+      }),
+      parseMethod: 'raw',
+    });
+    expect(mockAddSuccessToast).toHaveBeenCalledWith(
+      'Dashboard tabs exported successfully',
+    );
+  });
+  expect(createObjectURL).toHaveBeenCalledWith(mockBlob);
+  expect(revokeObjectURL).toHaveBeenCalledWith('blob:http://localhost/xlsx');
 });

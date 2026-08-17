@@ -38,6 +38,7 @@ import {
 import { useToasts } from 'src/components/MessageToasts/withToasts';
 
 import { DownloadScreenshotFormat } from './types';
+import { DashboardTabXlsxExport } from './DashboardTabXlsxExport';
 
 export interface UseDownloadMenuItemsProps {
   pdfMenuItemTitle: string;
@@ -184,6 +185,15 @@ export const useDownloadMenuItems = (
     },
     ...(userCanExport
       ? [
+          ...(isFeatureEnabled(FeatureFlag.StyledXlsxExport) &&
+          isFeatureEnabled(FeatureFlag.DashboardTabXlsxExport)
+            ? [
+                {
+                  key: 'export-tabs-xlsx',
+                  label: <DashboardTabXlsxExport dashboardId={dashboardId} />,
+                },
+              ]
+            : []),
           {
             key: 'export-as-example',
             label: t('Export as Example'),

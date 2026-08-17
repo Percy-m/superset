@@ -24,9 +24,11 @@ import pandas as pd
 from flask import current_app
 from flask_babel import gettext as _
 
+from superset import is_feature_enabled
 from superset.common.chart_data import ChartDataResultFormat
 from superset.common.db_query_status import QueryStatus
 from superset.common.query_actions import get_query_results
+from superset.common.table_alerts import TableRuleResolver
 from superset.common.utils.query_cache_manager import QueryCacheManager
 from superset.common.utils.time_range_utils import get_since_until_from_time_range
 from superset.constants import CACHE_DISABLED_TIMEOUT, CacheRegion
@@ -259,9 +261,40 @@ class QueryContextProcessor:
                 )
             elif self._query_context.result_format == ChartDataResultFormat.XLSX:
                 excel.apply_column_types(df, coltypes)
-                result = excel.df_to_excel(
-                    df, index=include_index, **current_app.config["EXCEL_EXPORT"]
-                )
+                if (
+                    is_feature_enabled("STYLED_XLSX_EXPORT")
+                    and self._query_context.result_format_options.get("styled") is True
+                    and self._query_context.slice_ is not None
+                ):
+                    from superset.utils.styled_excel import (  # pylint: disable=import-outside-toplevel
+                        dataframe_to_styled_xlsx,
+                        resolve_sheet_name,
+                        StyledExcelError,
+                    )
+
+                    slice_ = self._query_context.slice_
+                    rules = TableRuleResolver(
+                        slice_, cast(Any, self._qc_datasource)
+                    ).resolve_styles([str(column) for column in df.columns])
+                    sheet_name, _ = resolve_sheet_name(
+                        slice_.slice_name,
+                        slice_.id,
+                        set(),
+                    )
+                    try:
+                        result = dataframe_to_styled_xlsx(
+                            df,
+                            rules,
+                            sheet_name=sheet_name,
+                            column_types=coltypes,
+                            column_config=slice_.form_data.get("column_config"),
+                        )
+                    except StyledExcelError as ex:
+                        raise QueryObjectValidationError(str(ex)) from ex
+                else:
+                    result = excel.df_to_excel(
+                        df, index=include_index, **current_app.config["EXCEL_EXPORT"]
+                    )
             return result or ""
 
         return df.to_dict(orient="records")

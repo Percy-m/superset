@@ -104,3 +104,21 @@ class DashboardFaveError(CommandInvalidError):
 
 class DashboardUnfaveError(CommandInvalidError):
     message = _("Dashboard cannot be unfavorited.")
+
+
+class DashboardXlsxInvalidTabError(CommandInvalidError):
+    message = _("DASHBOARD_XLSX_INVALID_TAB: a selected tab is unavailable")
+
+
+class DashboardXlsxTableLimitExceededError(CommandInvalidError):
+    message = _(
+        "DASHBOARD_XLSX_TABLE_LIMIT_EXCEEDED: at most 10 Table charts can be exported"
+    )
+
+
+class DashboardXlsxNoTableError(CommandInvalidError):
+    message = _("DASHBOARD_XLSX_NO_TABLE: the selected tabs contain no Table charts")
+
+
+class DashboardXlsxChartFailedError(CommandInvalidError):
+    message = _("DASHBOARD_XLSX_CHART_FAILED: a Table chart could not be exported")

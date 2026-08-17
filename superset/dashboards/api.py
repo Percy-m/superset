@@ -17,8 +17,10 @@
 # pylint: disable=too-many-lines
 import functools
 import logging
+from collections.abc import Iterator
 from datetime import datetime
 from io import BytesIO
+from pathlib import Path
 from typing import Any, Callable, cast
 from zipfile import is_zipfile, ZipFile
 
@@ -39,7 +41,7 @@ from marshmallow import ValidationError
 from werkzeug.wrappers import Response as WerkzeugResponse
 from werkzeug.wsgi import FileWrapper
 
-from superset import db
+from superset import db, security_manager
 from superset.charts.schemas import ChartEntityResponseSchema
 from superset.commands.dashboard.copy import CopyDashboardCommand
 from superset.commands.dashboard.create import CreateDashboardCommand
@@ -59,9 +61,14 @@ from superset.commands.dashboard.exceptions import (
     DashboardNativeFiltersUpdateFailedError,
     DashboardNotFoundError,
     DashboardUpdateFailedError,
+    DashboardXlsxChartFailedError,
+    DashboardXlsxInvalidTabError,
+    DashboardXlsxNoTableError,
+    DashboardXlsxTableLimitExceededError,
 )
 from superset.commands.dashboard.export import ExportDashboardsCommand
 from superset.commands.dashboard.export_example import ExportExampleCommand
+from superset.commands.dashboard.export_xlsx import ExportDashboardXlsxCommand
 from superset.commands.dashboard.fave import AddFavoriteDashboardCommand
 from superset.commands.dashboard.importers.dispatcher import ImportDashboardsCommand
 from superset.commands.dashboard.permalink.create import CreateDashboardPermalinkCommand
@@ -102,6 +109,7 @@ from superset.dashboards.schemas import (
     DashboardPostSchema,
     DashboardPutSchema,
     DashboardScreenshotPostSchema,
+    DashboardXlsxExportSchema,
     EmbeddedDashboardConfigSchema,
     EmbeddedDashboardResponseSchema,
     get_delete_ids_schema,
@@ -113,7 +121,10 @@ from superset.dashboards.schemas import (
     TabsPayloadSchema,
     thumbnail_query_schema,
 )
-from superset.exceptions import ScreenshotImageNotAvailableException
+from superset.exceptions import (
+    ScreenshotImageNotAvailableException,
+    SupersetSecurityException,
+)
 from superset.extensions import event_logger
 from superset.models.dashboard import Dashboard
 from superset.models.embedded_dashboard import EmbeddedDashboard
@@ -150,6 +161,17 @@ from superset.views.filters import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _stream_file_response_with_cleanup(body: Any, path: Path) -> Iterator[bytes]:
+    """Remove an atomic export after WSGI finishes iterating its response."""
+    try:
+        yield from body
+    finally:
+        close = getattr(body, "close", None)
+        if callable(close):
+            close()
+        path.unlink(missing_ok=True)
 
 
 def with_dashboard(
@@ -246,6 +268,7 @@ class DashboardRestApi(CustomTagsOptimizationMixin, BaseSupersetModelRestApi):
         "put_chart_customizations",
         "put_colors",
         "export_as_example",
+        "export_xlsx",
     }
     resource_name = "dashboard"
     allow_browser_login = True
@@ -389,6 +412,7 @@ class DashboardRestApi(CustomTagsOptimizationMixin, BaseSupersetModelRestApi):
     dashboard_get_response_schema = DashboardGetResponseSchema()
     dashboard_dataset_schema = DashboardDatasetSchema()
     tab_schema = TabsPayloadSchema()
+    xlsx_export_schema = DashboardXlsxExportSchema()
     embedded_response_schema = EmbeddedDashboardResponseSchema()
     embedded_config_schema = EmbeddedDashboardConfigSchema()
 
@@ -428,6 +452,7 @@ class DashboardRestApi(CustomTagsOptimizationMixin, BaseSupersetModelRestApi):
         GetFavStarIdsSchema,
         EmbeddedDashboardResponseSchema,
         DashboardScreenshotPostSchema,
+        DashboardXlsxExportSchema,
     )
     apispec_parameter_schemas = {
         "get_delete_ids_schema": get_delete_ids_schema,
@@ -1187,6 +1212,93 @@ class DashboardRestApi(CustomTagsOptimizationMixin, BaseSupersetModelRestApi):
             return self.response_403()
         except DashboardDeleteFailedError as ex:
             return self.response_422(message=str(ex))
+
+    @expose("/<id_or_slug>/export_xlsx/", methods=("POST",))
+    @validate_feature_flags(["STYLED_XLSX_EXPORT", "DASHBOARD_TAB_XLSX_EXPORT"])
+    @protect()
+    @safe
+    @permission_name("read")
+    @statsd_metrics
+    @event_logger.log_this_with_context(
+        action=lambda self, *args, **kwargs: (f"{self.__class__.__name__}.export_xlsx"),
+        log_to_statsd=False,
+    )
+    @requires_json
+    @with_dashboard
+    def export_xlsx(self, dashboard: Dashboard) -> Response:
+        """Export saved Table charts under selected Dashboard Tabs as XLSX.
+        ---
+        post:
+          summary: Export selected Dashboard Tabs as a styled XLSX workbook
+          parameters:
+          - in: path
+            schema:
+              type: string
+            name: id_or_slug
+            description: Either the id of the dashboard, or its slug
+          requestBody:
+            required: true
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/DashboardXlsxExportSchema'
+          responses:
+            200:
+              description: Styled XLSX workbook
+              content:
+                application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+                  schema:
+                    type: string
+                    format: binary
+            400:
+              $ref: '#/components/responses/400'
+            401:
+              $ref: '#/components/responses/401'
+            403:
+              $ref: '#/components/responses/403'
+            404:
+              $ref: '#/components/responses/404'
+            422:
+              $ref: '#/components/responses/422'
+        """
+        if not security_manager.can_access("can_csv", "Superset"):
+            return self.response_403()
+        try:
+            payload = self.xlsx_export_schema.load(request.json)
+        except ValidationError as error:
+            return self.response_400(message=error.messages)
+
+        try:
+            result = ExportDashboardXlsxCommand(
+                dashboard,
+                payload["tabIds"],
+                payload["dataMask"],
+            ).run()
+        except DashboardXlsxInvalidTabError as ex:
+            return self.response_400(message=str(ex))
+        except (
+            DashboardXlsxChartFailedError,
+            DashboardXlsxNoTableError,
+            DashboardXlsxTableLimitExceededError,
+        ) as ex:
+            return self.response_422(message=str(ex))
+        except SupersetSecurityException:
+            return self.response_403()
+
+        response = send_file(
+            result.path,
+            mimetype=(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            ),
+            as_attachment=True,
+            download_name=result.filename,
+        )
+        response.response = _stream_file_response_with_cleanup(
+            response.response,
+            result.path,
+        )
+        response.call_on_close(lambda: result.path.unlink(missing_ok=True))
+        return response
 
     @expose("/export/", methods=("GET",))
     @protect()

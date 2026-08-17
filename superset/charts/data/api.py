@@ -498,6 +498,8 @@ class ChartDataRestApi(ChartRestApi):
             return self.response_422(message=exc.message)
         except ChartDataQueryFailedError as exc:
             return self.response_400(message=exc.message)
+        except QueryObjectValidationError as exc:
+            return self.response_422(message=exc.message)
 
             # Log is_cached if extra payload callback is provided
         if add_extra_log_payload and result and "queries" in result:

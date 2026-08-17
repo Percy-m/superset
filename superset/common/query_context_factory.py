@@ -30,6 +30,7 @@ from superset.common.table_alerts import (
     ALERT_FILTERS_EXTRA_KEY,
     ALERT_TOTALS_EXTRA_KEY,
     INVALID_ALERT_RULE_MESSAGE,
+    STYLED_XLSX_UNSUPPORTED_MESSAGE,
     TableRuleResolver,
 )
 from superset.daos.chart import ChartDAO
@@ -63,6 +64,7 @@ class QueryContextFactory:  # pylint: disable=too-few-public-methods
         form_data: dict[str, Any] | None = None,
         result_type: ChartDataResultType | None = None,
         result_format: ChartDataResultFormat | None = None,
+        result_format_options: dict[str, Any] | None = None,
         force: bool = False,
         custom_cache_timeout: int | None = None,
     ) -> QueryContext:
@@ -78,6 +80,21 @@ class QueryContextFactory:  # pylint: disable=too-few-public-methods
 
         result_type = result_type or ChartDataResultType.FULL
         result_format = result_format or ChartDataResultFormat.JSON
+        result_format_options = result_format_options or {}
+
+        if (
+            is_feature_enabled("STYLED_XLSX_EXPORT")
+            and result_format_options.get("styled") is True
+            and (
+                result_format != ChartDataResultFormat.XLSX
+                or not isinstance(slice_, Slice)
+                or slice_.viz_type != "table"
+                or slice_.datasource_type != "table"
+                or datasource_model_instance is None
+                or slice_.datasource_id != datasource_model_instance.id
+            )
+        ):
+            raise QueryObjectValidationError(STYLED_XLSX_UNSUPPORTED_MESSAGE)
 
         # The server pagination var is extracted from form data as the
         # row limit for server pagination is more
@@ -108,6 +125,7 @@ class QueryContextFactory:  # pylint: disable=too-few-public-methods
             "queries": resolved_queries,
             "result_type": result_type,
             "result_format": result_format,
+            "result_format_options": result_format_options,
         }
         return QueryContext(
             datasource=datasource_model_instance,
@@ -116,6 +134,7 @@ class QueryContextFactory:  # pylint: disable=too-few-public-methods
             form_data=form_data,
             result_type=result_type,
             result_format=result_format,
+            result_format_options=result_format_options,
             force=force,
             custom_cache_timeout=custom_cache_timeout,
             cache_values=cache_values,

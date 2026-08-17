@@ -23,12 +23,14 @@ import URI from 'urijs';
 import {
   buildQueryContext,
   ensureIsArray,
+  FeatureFlag,
   getChartBuildQueryRegistry,
   getChartMetadataRegistry,
   QueryFormData,
   SupersetClient,
   SetDataMaskHook,
   JsonObject,
+  isFeatureEnabled,
 } from '@superset-ui/core';
 import { availableDomains } from 'src/utils/hostNamesConfig';
 import { safeStringify } from 'src/utils/safeStringify';
@@ -325,7 +327,7 @@ export const buildV1ChartDataPayload = async ({
     : undefined;
   const buildQuery =
     (registryResult ? await registryResult : undefined) ?? defaultBuildQuery;
-  return buildQuery(
+  const queryContext = buildQuery(
     {
       ...formData,
       force,
@@ -340,6 +342,15 @@ export const buildV1ChartDataPayload = async ({
       },
     },
   );
+  if (
+    resultFormat === 'xlsx' &&
+    formData.viz_type === 'table' &&
+    formData.slice_id &&
+    isFeatureEnabled(FeatureFlag.StyledXlsxExport)
+  ) {
+    queryContext.result_format_options = { styled: true };
+  }
+  return queryContext;
 };
 
 export const getLegacyEndpointType = ({

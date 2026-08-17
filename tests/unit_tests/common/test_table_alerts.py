@@ -24,6 +24,8 @@ import sqlalchemy as sa
 from superset.common.table_alerts import (
     AlertFilterReference,
     build_alert_group_clause,
+    ResolvedTableStyleRule,
+    table_style_rule_matches,
     TableRuleResolver,
 )
 from superset.connectors.sqla.models import SqlaTable
@@ -314,3 +316,77 @@ def test_build_alert_group_clause_uses_or_and_decimal_boundaries() -> None:
     assert "amount >= 10.25" in sql
     assert "amount < 20.75" in sql
     assert "amount != 30" in sql
+
+
+def test_table_rule_resolver_reads_saved_style_priority_and_targets() -> None:
+    """XLSX styles preserve saved order and never accept client rule payloads."""
+    rules = [
+        {
+            "column": "gross_revenue",
+            "operator": "<",
+            "targetValue": 0,
+            "colorScheme": "#F5222D",
+            "objectFormatting": "BACKGROUND_COLOR",
+            "columnFormatting": "ENTIRE_ROW",
+            "useGradient": False,
+        },
+        {
+            "column": "gross_revenue",
+            "operator": "≥",
+            "targetValue": 0,
+            "colorScheme": "#52C41A",
+            "objectFormatting": "TEXT_COLOR",
+            "columnFormatting": "quantity",
+            "useGradient": False,
+        },
+        {
+            "column": "gross_revenue",
+            "operator": "None",
+            "colorScheme": "#1677FF",
+            "objectFormatting": "CELL_BAR",
+            "useGradient": False,
+        },
+    ]
+
+    resolved = make_resolver(rules).resolve_styles(["gross_revenue", "quantity"])
+
+    assert [(rule.dimension, rule.target_column) for rule in resolved] == [
+        ("background", None),
+        ("font", "quantity"),
+        ("data_bar", "gross_revenue"),
+    ]
+    assert [rule.color for rule in resolved] == ["#F5222D", "#52C41A", "#1677FF"]
+
+
+@pytest.mark.parametrize(
+    ("operator", "value", "expected"),
+    [
+        ("<", -1, True),
+        ("≥", 10, True),
+        ("≤ x <", 20, True),
+        ("containing", "ClickHouse 21.3", True),
+        ("is null", None, True),
+        ("is not null", None, False),
+    ],
+)
+def test_table_style_rule_matches_frontend_comparator_semantics(
+    operator: str,
+    value: object,
+    expected: bool,
+) -> None:
+    """Static XLSX evaluation follows saved Table comparison semantics."""
+    rule = ResolvedTableStyleRule(
+        source_column="value",
+        target_column="value",
+        dimension="background",
+        color="#FF0000",
+        operator=operator,
+        target_value=(
+            "House" if operator == "containing" else 0 if operator == "<" else 10
+        ),
+        target_value_left=10,
+        target_value_right=30,
+        use_gradient=False,
+    )
+
+    assert table_style_rule_matches(rule, value) is expected
