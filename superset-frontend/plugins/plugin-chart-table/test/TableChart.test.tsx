@@ -112,10 +112,21 @@ test('table header alert menu updates ownState and resets server pagination', as
       </ProviderWrapper>,
     );
 
-    fireEvent.click(
-      screen.getByLabelText('Filter by alert level for sum__num'),
+    const filterButton = screen.getByLabelText(
+      'Filter by alert level for sum__num',
     );
-    fireEvent.click(await screen.findByText('RED'));
+    fireEvent.click(filterButton);
+    const redAlert = await screen.findByRole('menuitemcheckbox', {
+      name: 'Critical alert',
+    });
+    const disabledWarning = screen.getByRole('menuitemcheckbox', {
+      name: 'Warning alert',
+    });
+    expect(disabledWarning).toHaveAttribute('aria-disabled', 'true');
+    expect(within(disabledWarning).getByTestId('warning')).toHaveStyle(
+      `color: ${supersetTheme.colorTextDisabled}`,
+    );
+    fireEvent.click(redAlert);
 
     await waitFor(() => {
       expect(setDataMask).toHaveBeenLastCalledWith({
@@ -130,6 +141,184 @@ test('table header alert menu updates ownState and resets server pagination', as
           ],
         },
       });
+    });
+  } finally {
+    window.featureFlags = previousFlags;
+  }
+});
+
+test('table header alert menu stays hidden when feature flag is disabled', () => {
+  const previousFlags = window.featureFlags;
+  window.featureFlags = { [FeatureFlag.TableAlertFilters]: false };
+  try {
+    const props = transformProps({
+      ...testData.advanced,
+      rawFormData: {
+        ...testData.advanced.rawFormData,
+        conditional_formatting: [
+          {
+            ruleId: '772a548e-72f7-4ac8-a8ff-fdb7465b3ccd',
+            subjectRef: { kind: 'saved_metric', key: 'sum__num' },
+            alertLevel: 'RED',
+            filterable: true,
+            column: 'sum__num',
+            operator: '>',
+            targetValue: 100,
+            colorScheme: '#f00',
+            useGradient: false,
+          },
+        ],
+      },
+    });
+    render(
+      <ProviderWrapper>
+        <TableChart {...props} sticky={false} />
+      </ProviderWrapper>,
+    );
+
+    expect(
+      screen.queryByLabelText('Filter by alert level for sum__num'),
+    ).not.toBeInTheDocument();
+  } finally {
+    window.featureFlags = previousFlags;
+  }
+});
+
+test('table header alert menu uses accessible status icons and tooltips', async () => {
+  const previousFlags = window.featureFlags;
+  window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
+  const redRuleId = '772a548e-72f7-4ac8-a8ff-fdb7465b3ccd';
+  const setDataMask = jest.fn();
+  try {
+    const props = transformProps({
+      ...testData.advanced,
+      hooks: {
+        ...testData.advanced.hooks,
+        setDataMask,
+      },
+      ownState: {
+        alertFilters: [{ ruleId: redRuleId, level: 'RED' }],
+      },
+      rawFormData: {
+        ...testData.advanced.rawFormData,
+        conditional_formatting: [
+          {
+            ruleId: redRuleId,
+            subjectRef: { kind: 'saved_metric', key: 'sum__num' },
+            alertLevel: 'RED',
+            filterable: true,
+            column: 'sum__num',
+            operator: '>',
+            targetValue: 100,
+            colorScheme: '#f00',
+            useGradient: false,
+          },
+          {
+            ruleId: '99ab3f13-81cb-433b-8615-1290f4ddf6cc',
+            subjectRef: { kind: 'saved_metric', key: 'sum__num' },
+            alertLevel: 'YELLOW',
+            filterable: true,
+            column: 'sum__num',
+            operator: '>',
+            targetValue: 50,
+            colorScheme: '#ff0',
+            useGradient: false,
+          },
+          {
+            ruleId: '4d365b0c-0aca-43e8-97a7-efb01b94e8f2',
+            subjectRef: { kind: 'saved_metric', key: 'sum__num' },
+            alertLevel: 'GREEN',
+            filterable: true,
+            column: 'sum__num',
+            operator: '<=',
+            targetValue: 50,
+            colorScheme: '#0f0',
+            useGradient: false,
+          },
+        ],
+      },
+    });
+    render(
+      <ProviderWrapper>
+        <TableChart {...props} sticky={false} />
+      </ProviderWrapper>,
+    );
+
+    const iconFilterButton = screen.getByLabelText(
+      'Filter by alert level for sum__num',
+    );
+    fireEvent.click(iconFilterButton);
+    const redAlert = await screen.findByRole('menuitemcheckbox', {
+      name: 'Critical alert',
+    });
+    const yellowAlert = screen.getByRole('menuitemcheckbox', {
+      name: 'Warning alert',
+    });
+    const greenAlert = screen.getByRole('menuitemcheckbox', {
+      name: 'Normal status',
+    });
+
+    expect(
+      screen.queryByText(
+        /^(RED|YELLOW|GREEN|Red alert|Yellow alert|Green alert)$/,
+      ),
+    ).not.toBeInTheDocument();
+    expect(redAlert).toHaveAttribute('aria-checked', 'true');
+    expect(yellowAlert).toHaveAttribute('aria-checked', 'false');
+    expect(greenAlert).toHaveAttribute('aria-checked', 'false');
+    expect(within(redAlert).getByTestId('check')).toHaveAttribute(
+      'aria-hidden',
+      'true',
+    );
+
+    const redIcon = within(redAlert).getByTestId('stop');
+    const yellowIcon = within(yellowAlert).getByTestId('warning');
+    const greenIcon = within(greenAlert).getByTestId('check-circle');
+    expect(redIcon).toHaveAttribute('aria-hidden', 'true');
+    expect(yellowIcon).toHaveAttribute('aria-hidden', 'true');
+    expect(greenIcon).toHaveAttribute('aria-hidden', 'true');
+    expect(redIcon).toHaveStyle(`color: ${supersetTheme.colorError}`);
+    expect(yellowIcon).toHaveStyle(`color: ${supersetTheme.colorWarning}`);
+    expect(greenIcon).toHaveStyle(`color: ${supersetTheme.colorSuccess}`);
+
+    const hiddenRedLabel = within(redAlert).getByText('Critical alert');
+    expect(hiddenRedLabel).toHaveStyle({
+      position: 'absolute',
+      width: '1px',
+      height: '1px',
+      overflow: 'hidden',
+    });
+    const redLabel = hiddenRedLabel.parentElement;
+    expect(redLabel).not.toBeNull();
+    fireEvent.mouseEnter(redLabel as HTMLElement);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(
+      'Critical alert',
+    );
+    fireEvent.blur(redAlert);
+    fireEvent.mouseLeave(redLabel as HTMLElement);
+    await waitFor(() => {
+      expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+    });
+
+    fireEvent.focus(redAlert);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent(
+      'Critical alert',
+    );
+    fireEvent.keyDown(redAlert, {
+      key: 'Enter',
+      code: 'Enter',
+      keyCode: 13,
+      which: 13,
+    });
+    fireEvent.blur(redAlert);
+    await waitFor(() => {
+      expect(setDataMask).toHaveBeenLastCalledWith({
+        ownState: {
+          alertFilters: [],
+          currentPage: 0,
+        },
+      });
+      expect(iconFilterButton).not.toHaveAttribute('aria-expanded', 'true');
     });
   } finally {
     window.featureFlags = previousFlags;

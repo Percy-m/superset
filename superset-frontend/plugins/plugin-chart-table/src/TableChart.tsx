@@ -247,6 +247,88 @@ const VisuallyHidden = styled.label`
   border: 0;
 `;
 
+function AlertLevelMenuLabel({
+  disabled,
+  level,
+}: {
+  disabled: boolean;
+  level: AlertLevel;
+}) {
+  const theme = useTheme();
+  const labelRef = useRef<HTMLSpanElement>(null);
+  const [isMenuItemFocused, setIsMenuItemFocused] = useState(false);
+  const [isTooltipOpen, setIsTooltipOpen] = useState(false);
+  const presentations = {
+    RED: {
+      color: theme.colorError,
+      icon: Icons.StopOutlined,
+      label: t('Critical alert'),
+    },
+    YELLOW: {
+      color: theme.colorWarning,
+      icon: Icons.WarningOutlined,
+      label: t('Warning alert'),
+    },
+    GREEN: {
+      color: theme.colorSuccess,
+      icon: Icons.CheckCircleOutlined,
+      label: t('Normal status'),
+    },
+  } satisfies Record<
+    AlertLevel,
+    {
+      color: string;
+      icon: typeof Icons.StopOutlined;
+      label: string;
+    }
+  >;
+  const { color, icon: AlertIcon, label } = presentations[level];
+
+  useEffect(() => {
+    const menuItem = labelRef.current?.closest<HTMLElement>(
+      '[role="menuitemcheckbox"]',
+    );
+    if (!menuItem) {
+      return undefined;
+    }
+
+    const handleFocus = () => setIsMenuItemFocused(true);
+    const handleBlur = () => setIsMenuItemFocused(false);
+    menuItem.addEventListener('focus', handleFocus);
+    menuItem.addEventListener('blur', handleBlur);
+
+    return () => {
+      menuItem.removeEventListener('focus', handleFocus);
+      menuItem.removeEventListener('blur', handleBlur);
+    };
+  }, []);
+
+  return (
+    <Tooltip
+      open={isMenuItemFocused || isTooltipOpen}
+      onOpenChange={setIsTooltipOpen}
+      placement="right"
+      title={label}
+      trigger={['hover', 'focus']}
+    >
+      <span
+        ref={labelRef}
+        css={css`
+          display: inline-flex;
+          align-items: center;
+        `}
+      >
+        <AlertIcon
+          aria-hidden
+          iconColor={disabled ? theme.colorTextDisabled : color}
+          iconSize="m"
+        />
+        <VisuallyHidden as="span">{label}</VisuallyHidden>
+      </span>
+    </Tooltip>
+  );
+}
+
 function SearchInput({
   count,
   value,
@@ -428,12 +510,24 @@ export default function TableChart<D extends DataRecord = DataRecord>(
           trigger={['click']}
           menu={{
             multiple: true,
+            selectable: true,
             selectedKeys,
-            items: levels.map(level => ({
-              key: level,
-              label: level,
-              disabled: !rules.some(rule => rule.alertLevel === level),
-            })),
+            items: levels.map(level => {
+              const disabled = !rules.some(rule => rule.alertLevel === level);
+              return {
+                key: level,
+                role: 'menuitemcheckbox',
+                'aria-checked': selectedKeys.includes(level),
+                label: (
+                  <AlertLevelMenuLabel disabled={disabled} level={level} />
+                ),
+                disabled,
+                itemIcon: ({ isSelected }: { isSelected?: boolean }) =>
+                  isSelected ? (
+                    <Icons.CheckOutlined aria-hidden iconSize="s" />
+                  ) : null,
+              };
+            }),
             onClick: ({ key, domEvent }) => {
               domEvent.stopPropagation();
               const level = key as AlertLevel;
