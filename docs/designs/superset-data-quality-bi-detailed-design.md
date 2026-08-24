@@ -21,7 +21,7 @@ under the License.
 
 | 属性          | 值                                                                                                          |
 | ------------- | ----------------------------------------------------------------------------------------------------------- |
-| 文档版本      | V1.6                                                                                                        |
+| 文档版本      | V1.7                                                                                                        |
 | 文档状态      | Implemented（验收持续补充）                                                                                 |
 | 日期          | 2026-08-24                                                                                                  |
 | 输入需求      | 《Superset 6.0 数据质量 BI 增强需求分析与设计文档》V1.4                                                     |
@@ -738,6 +738,14 @@ Sheet 名处理顺序：
 - RLS、Guest Token 和当前用户上下文；
 - Chart Data QueryContext 的既有访问检查。
 
+构建 QueryContext 时，command 必须创建新的 `form_data` 顶层字典，并用已经通过 Dashboard
+API 鉴权的当前 Dashboard ID 无条件覆盖 `dashboardId`。保存 Slice 中的同名字段可能陈旧，
+`dataMask` 中的同名键属于不可信输入；二者都不能选择 Guest/Dashboard RBAC 权限上下文。
+覆盖操作不得修改持久化 Slice 对象。Guest 没有直接 Dataset 权限时，后续仍由现有
+`can_access_datasource()` 校验 Dashboard 资源、Slice 归属、Dataset 归属和 Guest Token，
+RLS 继续在同一 QueryContext 中求值。普通用户和 MySQL/PostgreSQL 等引擎只多携带一个
+服务端可信上下文字段，不改变 SQL dialect、查询谓词或数据库权限模型。
+
 只要任一 Table 无权访问或查询失败，整个导出失败。混合 Dashboard 中“非 Table”是
 预期跳过，不视为失败；“Table 无权限”不是跳过项，防止利用说明 Sheet探测受限数据。
 
@@ -1341,7 +1349,7 @@ REST 和权限用例标记 Environment Blocked，不得伪报通过。
 | TC-FR04-08 | Sheet 标题含 `[]:*?/\\`、>31 字符、重名 | 导出                                  | 非法字符替换、长度合法、稳定产生 ` (2)` 后缀        |
 | TC-FR04-09 | 解析出 10/11 个 Table                   | 分别导出                              | 10 个成功；11 个返回 table-limit 错误，不截断       |
 | TC-FR04-10 | 第 2 个 Table 查询故意失败              | 导出多个 Sheet                        | 返回 JSON 错误，无 XLSX body，临时文件清理          |
-| TC-FR04-11 | 无 Dashboard/can_csv/Dataset 权限       | 分别调用 API                          | 404/403；不能通过说明 Sheet 探测受限 Chart          |
+| TC-FR04-11 | 无 Dashboard/can_csv/Dataset 权限；保存值和 dataMask 伪造 Dashboard ID | 分别调用 API | 404/403；授权 Guest 使用服务端 ID；伪造值不能跨 Dashboard |
 | TC-FR04-12 | Native + Cross + alert 组合状态         | 比较 Dashboard 屏幕和 XLSX            | 每个 Sheet 行数、关键聚合和 totals 一致             |
 | TC-FR04-13 | 10 个 10k 级 Table                      | 记录查询和进程内存                    | 查询严格串行；峰值不随 Sheet 数线性累积；全程无 OOM |
 | TC-FR04-14 | 大 cell/8 MiB fixture                   | 导出                                  | 在 Workbook 创建前按产品上限拒绝，不生成损坏文件    |

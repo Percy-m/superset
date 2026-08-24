@@ -21,11 +21,11 @@ under the License.
 
 | 属性         | 值                                                                                                          |
 | ------------ | ----------------------------------------------------------------------------------------------------------- |
-| 文档版本     | V1.7                                                                                                        |
+| 文档版本     | V1.8                                                                                                        |
 | 文档状态     | Implemented（验收持续补充）                                                                                 |
 | 日期         | 2026-08-24                                                                                                  |
 | 需求输入     | 数据质量 BI 增强需求 V1.4                                                                                   |
-| 详细设计     | [数据质量 BI 增强详细设计](./superset-data-quality-bi-detailed-design.md) V1.6                              |
+| 详细设计     | [数据质量 BI 增强详细设计](./superset-data-quality-bi-detailed-design.md) V1.7                              |
 | 补充设计     | [ClickHouse 21.3 兼容与 Drill Detail 表格对齐](./superset-clickhouse-21-3-drill-detail-alignment-design.md) |
 | 原始实现基线 | `dev/6.1`，`c83fb2bb1dcf`（Superset 6.1.0 RC3）                                                             |
 | 增量审计基线 | `dev/6.1`，`5f4c1760262a`                                                                                   |
@@ -684,6 +684,13 @@ flowchart TD
 服务端不接受客户端提供 Chart 清单或 scope。Native Filter scope、Cross Filter source 和
 target 均从保存 Dashboard 配置推导；告警引用再次通过 `TableRuleResolver` 验证。
 
+Guest Token 和 Dashboard RBAC 的 Dataset 准入会读取 QueryContext `form_data.dashboardId`。
+Dashboard 导出 command 必须复制保存的 Slice `form_data`，再无条件以服务端已经加载并鉴权的
+`self._dashboard.id` 覆盖该字段；不得使用 `setdefault`、客户端 `dataMask` 值或保存 Slice 中
+陈旧/伪造的 Dashboard ID，也不得原地修改 `chart.form_data`。该字段只建立权限上下文，不
+改变筛选语义。这样既允许无直接 Dataset 权限的受限 Guest 导出其被授权 Dashboard，又不能
+借伪造 ID 跨 Dashboard 复用访问权。
+
 ### 7.5 Workbook 原子写入时序
 
 ```mermaid
@@ -753,7 +760,7 @@ Workbook 写入要求：
 | FR4-05 | 增加 Dashboard API schema、权限装饰器和错误映射        | 400/403/404/422 契约通过             |
 | FR4-06 | 实现 position_json Tab 验证、DFS、去重和 10 Table 上限 | 嵌套 Tab 和重复 Slice 顺序稳定       |
 | FR4-07 | 实现服务端 Dashboard Native/Cross/alert 状态解析       | 与 FR-03 JSON fixtures 契约一致      |
-| FR4-08 | 实现逐 Table QueryContext、Chart/Dataset/DB/RLS 校验   | 任一无权时整体失败                   |
+| FR4-08 | 实现逐 Table QueryContext、可信 Dashboard context、Chart/Dataset/DB/RLS 校验 | 任一无权时整体失败；伪造 ID 无效 |
 | FR4-09 | 实现 constant-memory 多 Sheet writer 和 `_导出说明`    | 串行执行，单表结果及时释放           |
 | FR4-10 | 实现临时文件生命周期和响应完成后的清理                 | 查询、close、客户端断开路径无残留    |
 | FR4-11 | 实现 Dashboard Tab 选择菜单、下载和通用错误反馈        | UI 不暴露 SQL、筛选值或数据库详情    |

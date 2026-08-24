@@ -101,6 +101,11 @@ def test_dashboard_state_resolver_keeps_only_scoped_filters_and_alert_refs() -> 
         "chart_configuration": {"1": {"crossFilters": {"chartsInScope": [2]}}},
     }
     data_mask: dict[str, object] = {
+        "dashboardId": {
+            "extraFormData": {
+                "filters": [{"col": "forged_dashboard_context", "op": "==", "val": 999}]
+            }
+        },
         "FILTER-a": {
             "extraFormData": {
                 "filters": [
@@ -145,6 +150,12 @@ def test_dashboard_state_resolver_keeps_only_scoped_filters_and_alert_refs() -> 
             "level": "RED",
         }
     ]
+    effective_filters = extra_form_data["filters"]
+    assert isinstance(effective_filters, list)
+    assert all(
+        isinstance(item, dict) and item.get("col") != "forged_dashboard_context"
+        for item in effective_filters
+    )
     assert resolver.dropped_state_count == 2
 
 
@@ -231,6 +242,32 @@ def test_dashboard_xlsx_rejects_more_than_ten_tables_without_truncating() -> Non
             make_dashboard(layout, charts),
             ["TAB-a"],
         )._collect_work_items()
+
+
+def test_dashboard_xlsx_query_context_uses_trusted_dashboard_id() -> None:
+    chart = make_chart(1, "Table")
+    chart.form_data.update({"dashboardId": 999, "row_limit": 100})
+    chart.query_context = json.dumps(
+        {
+            "datasource": {"id": 7, "type": "table"},
+            "queries": [{"columns": [], "metrics": []}],
+        }
+    )
+    command = ExportDashboardXlsxCommand(
+        make_dashboard({}, [chart]),
+        ["TAB-a"],
+    )
+
+    with (
+        patch.object(command, "_row_limit", return_value=100),
+        patch("superset.commands.dashboard.export_xlsx.QueryContextFactory") as factory,
+    ):
+        command._query_context(chart, {}, [])
+
+    create_kwargs = factory.return_value.create.call_args.kwargs
+    assert create_kwargs["current_slice"] is chart
+    assert create_kwargs["form_data"]["dashboardId"] == 17
+    assert chart.form_data["dashboardId"] == 999
 
 
 def test_dashboard_xlsx_failure_closes_writer_and_removes_temporary_file(

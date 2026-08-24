@@ -457,7 +457,10 @@ class ExportDashboardXlsxCommand(BaseCommand):
         ):
             raise DashboardXlsxChartFailedError()
 
-        form_data = chart.form_data
+        form_data = {
+            **chart.form_data,
+            "dashboardId": self._dashboard.id,
+        }
         main_query = copy.deepcopy(saved_queries[0])
         main_query["row_limit"] = self._row_limit(form_data)
         main_query["row_offset"] = 0
