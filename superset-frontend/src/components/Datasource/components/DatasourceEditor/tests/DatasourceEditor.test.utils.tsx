@@ -24,15 +24,29 @@ import {
   userEvent,
 } from 'spec/helpers/testing-library';
 import mockDatasource from 'spec/fixtures/mockDatasource';
+import type { JsonObject } from '@superset-ui/core';
 import type { DatasetObject } from 'src/features/datasets/types';
+import database from 'src/database/reducers';
+import reducerIndex from 'spec/helpers/reducerIndex';
 import DatasourceEditor from '..';
 
+const datasourceEditorReducers = { ...reducerIndex, database };
+
+type DatasourceEditorTestDatasource = DatasetObject & {
+  database?: {
+    id?: number;
+    database_name?: string;
+    name?: string;
+    backend?: string;
+  };
+};
+
 export interface DatasourceEditorProps {
-  datasource: DatasetObject;
+  datasource: DatasourceEditorTestDatasource;
   addSuccessToast: () => void;
   addDangerToast: () => void;
   onChange: jest.MockedFunction<
-    (datasource: DatasetObject, errors?: unknown) => void
+    (datasource: DatasourceEditorTestDatasource, errors?: unknown) => void
   >;
   formatQuery?: jest.Mock;
   columnLabels?: Record<string, string>;
@@ -83,11 +97,19 @@ const routeProps = {
   match: {},
 };
 
-export const asyncRender = (renderProps: DatasourceEditorProps) =>
+export const asyncRender = (
+  renderProps: DatasourceEditorProps,
+  initialState: JsonObject = {},
+  includeDatabaseReducer = false,
+) =>
   waitFor(() =>
     render(<DatasourceEditor {...renderProps} {...routeProps} />, {
       useRedux: true,
-      initialState: { common: { currencies: ['USD', 'GBP', 'EUR'] } },
+      initialState: {
+        common: { currencies: ['USD', 'GBP', 'EUR'] },
+        ...initialState,
+      },
+      ...(includeDatabaseReducer && { reducers: datasourceEditorReducers }),
       useRouter: true,
     }),
   );

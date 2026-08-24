@@ -27,10 +27,6 @@ jest.mock('@superset-ui/core', () => ({
   },
 }));
 
-jest.mock('src/utils/pathUtils', () => ({
-  ensureAppRoot: jest.fn((path: string) => path),
-}));
-
 const mockPostForm = SupersetClient.postForm as jest.MockedFunction<
   typeof SupersetClient.postForm
 >;
@@ -100,4 +96,6 @@ test('new-tab failure logs only diagnostics and never falls back to a URL', asyn
       sha256Prefix: expect.stringMatching(/^(?:[0-9a-f]{12}|unavailable)$/),
     }),
   );
+  logSpy.mockRestore();
+  openSpy.mockRestore();
 });

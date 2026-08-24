@@ -16,7 +16,11 @@
 # under the License.
 
 
-from superset.utils.log import get_logger_from_status
+import hashlib
+
+from superset.utils import json
+from superset.utils.log import collect_request_payload, get_logger_from_status
+from tests.integration_tests.test_app import app
 
 
 def test_log_from_status_exception() -> None:
@@ -35,3 +39,57 @@ def test_log_from_status_info() -> None:
     (func, log_level) = get_logger_from_status(300)
     assert func.__name__ == "info"
     assert log_level == "info"
+
+
+def test_sqllab_post_log_payload_excludes_query_and_tokens() -> None:
+    sql = "SELECT 'secret-marker 数据质量🙂'"
+    with app.test_request_context(
+        "/sqllab/",
+        method="POST",
+        data={
+            "csrf_token": "csrf-secret",
+            "form_data": json.dumps({"dbid": "3", "sql": sql}),
+            "guest_token": "guest-secret",
+        },
+    ) as request_context:
+        request_context.match_request()
+        payload = collect_request_payload()
+
+    assert payload == {
+        "path": "/sqllab/",
+        "sql_navigation_status": "accepted",
+        "sql_character_count": len(sql),
+        "sql_utf8_byte_count": len(sql.encode("utf-8")),
+        "sql_sha256_prefix": hashlib.sha256(sql.encode("utf-8")).hexdigest()[:12],
+    }
+
+
+def test_sqllab_post_log_payload_sanitizes_invalid_inputs() -> None:
+    cases: tuple[tuple[dict[str, str], str], ...] = (
+        ({}, "missing_payload"),
+        ({"form_data": "not-json", "sql": "direct-secret"}, "invalid_payload"),
+        ({"form_data": json.dumps({"sql": 42})}, "missing_sql"),
+    )
+
+    for form_data, expected_status in cases:
+        with app.test_request_context(
+            "/sqllab/?sql=query-secret",
+            method="POST",
+            data={"csrf_token": "csrf-secret", **form_data},
+        ) as request_context:
+            request_context.match_request()
+            payload = collect_request_payload()
+
+        assert payload == {
+            "path": "/sqllab/",
+            "sql_navigation_status": expected_status,
+        }
+
+
+def test_sqllab_get_log_payload_keeps_legacy_collection_behavior() -> None:
+    with app.test_request_context("/sqllab/?custom_value=visible") as request_context:
+        request_context.match_request()
+        payload = collect_request_payload()
+
+    assert payload["custom_value"] == "visible"
+    assert "sql_navigation_status" not in payload

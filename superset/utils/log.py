@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import functools
+import hashlib
 import inspect
 import logging
 import textwrap
@@ -37,6 +38,28 @@ from superset.utils.core import get_user_id, LoggerLevel, to_int
 logger = logging.getLogger(__name__)
 
 
+def _get_sqllab_navigation_diagnostics(
+    serialized_query: str,
+) -> dict[str, str | int]:
+    """Return non-sensitive diagnostics for a SQL Lab POST navigation."""
+    try:
+        requested_query = json.loads(serialized_query)
+    except (TypeError, json.JSONDecodeError):
+        return {"sql_navigation_status": "invalid_payload"}
+
+    sql = requested_query.get("sql") if isinstance(requested_query, dict) else None
+    if not isinstance(sql, str):
+        return {"sql_navigation_status": "missing_sql"}
+
+    encoded_sql = sql.encode("utf-8")
+    return {
+        "sql_navigation_status": "accepted",
+        "sql_character_count": len(sql),
+        "sql_utf8_byte_count": len(encoded_sql),
+        "sql_sha256_prefix": hashlib.sha256(encoded_sql).hexdigest()[:12],
+    }
+
+
 def collect_request_payload() -> dict[str, Any]:
     """Collect log payload identifiable from request context"""
     if not request:
@@ -52,6 +75,15 @@ def collect_request_payload() -> dict[str, Any]:
     if request.is_json:
         json_payload = request.get_json(cache=True, silent=True) or {}
         payload.update(json_payload)
+
+    if request.method == "POST" and request.endpoint == "SqllabView.root":
+        serialized_query = request.form.get("form_data")
+        payload = {"path": request.path}
+        payload.update(
+            _get_sqllab_navigation_diagnostics(serialized_query)
+            if serialized_query is not None
+            else {"sql_navigation_status": "missing_payload"}
+        )
 
     # save URL match pattern in addition to the request path
     url_rule = str(request.url_rule)
@@ -419,7 +451,7 @@ class DBEventLogger(AbstractEventLogger):
             logging.exception(ex)
             # Rollback to clean up the session state
             try:
-                db.session.rollback()
+                db.session.rollback()  # pylint: disable=consider-using-transaction
             except Exception:  # pylint: disable=broad-except
                 # If rollback also fails, just continue - don't let issues crash the app
                 logging.error(

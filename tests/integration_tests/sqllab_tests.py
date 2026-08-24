@@ -18,12 +18,14 @@
 """Unit tests for Sql Lab"""
 
 from textwrap import dedent
+import hashlib
 
 import pytest
 from celery.exceptions import SoftTimeLimitExceeded
 from parameterized import parameterized
 from unittest import mock
 import prison
+from sqlalchemy import func
 
 from superset import db, security_manager
 from superset.connectors.sqla.models import SqlaTable  # noqa: F401
@@ -33,6 +35,7 @@ from superset.db_engine_specs.presto import PrestoEngineSpec
 from superset.errors import ErrorLevel, SupersetError, SupersetErrorType
 from superset.exceptions import SupersetErrorException, SupersetInvalidCVASException
 from superset.models.sql_lab import Query
+from superset.models.core import Log
 from superset.result_set import SupersetResultSet
 from superset.sqllab.limiting_factor import LimitingFactor
 from superset.sql.parse import CTASMethod
@@ -265,13 +268,25 @@ class TestSqlLab(SupersetTestCase):
                 f"-- line {index:03d} 测试🙂 \"quoted\" 'single' \\path\t{'x' * 20}\r\n"
                 for index in range(300)
             )
-            + "SELECT count() FROM complex_sql_cases;"
+            + "SELECT 'secret-marker', count() FROM complex_sql_cases;"
         )
-        requested_query = {"datasourceKey": "7__table", "sql": sql}
+        requested_query = {
+            "dbid": "3",
+            "sql": sql,
+            "name": "Revenue 数据集",
+            "catalog": "analytics",
+            "schema": "superset_quality_21_3",
+            "autorun": True,
+            "isDataset": True,
+        }
         assert len(sql.split("\r\n")) == 301
         assert len(sql) >= 12_000
         assert len(sql.encode("utf-8")) >= 12_000
         self.login(ADMIN_USERNAME)
+        previous_log_id = db.session.query(func.max(Log.id)).scalar() or 0
+        source_referrer = (
+            "http://localhost/dataset/list/?native_filters_key=clean-navigation"
+        )
 
         with (
             mock.patch.object(security_manager, "has_access", return_value=True),
@@ -282,13 +297,57 @@ class TestSqlLab(SupersetTestCase):
         ):
             response = self.client.post(
                 "/sqllab/",
-                data={"form_data": json.dumps(requested_query)},
+                data={
+                    "csrf_token": "csrf-secret",
+                    "form_data": json.dumps(requested_query),
+                    "guest_token": "guest-secret",
+                },
+                headers={"Referer": source_referrer},
             )
 
         assert response.status_code == 200
         render_app_template.assert_called_once_with(
             {"requested_query": requested_query}
         )
+
+        new_logs = db.session.query(Log).filter(Log.id > previous_log_id).all()
+        try:
+            serialized_logs = "\n".join(log.json or "" for log in new_logs)
+            serialized_referrers = "\n".join(log.referrer or "" for log in new_logs)
+            assert sql not in serialized_logs
+            assert sql not in serialized_referrers
+            assert "secret-marker" not in serialized_logs
+            assert "secret-marker" not in serialized_referrers
+            assert "sql=" not in serialized_referrers
+            assert "csrf-secret" not in serialized_logs
+            assert "guest-secret" not in serialized_logs
+            logged_records = [
+                (log, json.loads(log.json)) for log in new_logs if log.json
+            ]
+            navigation_payloads = [
+                (log, payload)
+                for log, payload in logged_records
+                if payload.get("sql_navigation_status") == "accepted"
+                and payload.get("object_ref") == "SqllabView.root"
+            ]
+            assert len(navigation_payloads) == 1
+            navigation_log, navigation_payload = navigation_payloads[0]
+            assert navigation_log.referrer == source_referrer
+            assert "form_data" not in navigation_payload
+            assert "csrf_token" not in navigation_payload
+            assert navigation_payload["sql_character_count"] == len(sql)
+            assert navigation_payload["sql_utf8_byte_count"] == len(sql.encode("utf-8"))
+            assert (
+                navigation_payload["sql_sha256_prefix"]
+                == hashlib.sha256(sql.encode("utf-8")).hexdigest()[:12]
+            )
+        finally:
+            log_ids = [log.id for log in new_logs]
+            if log_ids:
+                db.session.query(Log).filter(Log.id.in_(log_ids)).delete(
+                    synchronize_session=False
+                )
+                db.session.commit()
 
     def test_sqllab_no_access(self):
         self.login(GAMMA_USERNAME)

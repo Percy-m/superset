@@ -24,7 +24,13 @@ import {
   userEvent,
   within,
 } from 'spec/helpers/testing-library';
-import { DatasourceType, isFeatureEnabled } from '@superset-ui/core';
+import {
+  DatasourceType,
+  FeatureFlag,
+  isFeatureEnabled,
+} from '@superset-ui/core';
+import { openSqlLabQuery } from 'src/SqlLab/utils/openSqlLabQuery';
+import { addDangerToast } from 'src/components/MessageToasts/actions';
 import {
   createProps,
   DATASOURCE_ENDPOINT,
@@ -41,12 +47,28 @@ jest.mock('@superset-ui/core', () => ({
   isFeatureEnabled: jest.fn(),
 }));
 
+jest.mock('src/SqlLab/utils/openSqlLabQuery', () => ({
+  openSqlLabQuery: jest.fn(),
+}));
+
+jest.mock('src/components/MessageToasts/actions', () => {
+  const actual = jest.requireActual('src/components/MessageToasts/actions');
+  return {
+    ...actual,
+    addDangerToast: jest.fn(actual.addDangerToast),
+  };
+});
+
+const mockOpenSqlLabQuery = jest.mocked(openSqlLabQuery);
+const mockAddDangerToast = jest.mocked(addDangerToast);
+
 beforeEach(() => {
   jest.useRealTimers();
   fetchMock.removeRoutes();
   fetchMock.get(DATASOURCE_ENDPOINT, [], { name: DATASOURCE_ENDPOINT });
   setupDatasourceEditorMocks();
   jest.clearAllMocks();
+  mockOpenSqlLabQuery.mockResolvedValue();
 });
 
 afterEach(async () => {
@@ -308,6 +330,180 @@ test('Source Tab: readOnly mode', async () => {
 
   expect(physicalRadioBtn).toBeDisabled();
   expect(virtualRadioBtn).toBeDisabled();
+});
+
+test('opens virtual dataset SQL Lab with POST navigation when enabled', async () => {
+  const longSql = `${Array.from(
+    { length: 300 },
+    (_, index) => `-- ${index} 数据质量🙂 ${'x'.repeat(30)}\n`,
+  ).join('')}SELECT count() FROM fact_sales`;
+  jest
+    .mocked(isFeatureEnabled)
+    .mockImplementation(flag => flag === FeatureFlag.LongSqlPostNavigation);
+  const openSpy = jest.spyOn(window, 'open');
+  const testProps = createProps();
+
+  await asyncRender({
+    ...testProps,
+    datasource: {
+      ...testProps.datasource,
+      sql: longSql,
+      datasource_name: 'Revenue 数据集',
+      catalog: 'analytics',
+      schema: 'superset_quality_21_3',
+      database: { id: 3, database_name: 'ClickHouse 21.3' },
+    },
+  });
+
+  await userEvent.click(
+    screen.getByRole('button', { name: /open sql lab in a new tab/i }),
+  );
+
+  expect(mockOpenSqlLabQuery).toHaveBeenCalledWith({
+    requestedQuery: {
+      dbid: '3',
+      sql: longSql,
+      name: 'Revenue 数据集',
+      catalog: 'analytics',
+      schema: 'superset_quality_21_3',
+      autorun: true,
+      isDataset: true,
+    },
+    target: 'new-tab',
+  });
+  expect(openSpy).not.toHaveBeenCalled();
+  expect(window.location.href).not.toContain('sql=');
+  openSpy.mockRestore();
+});
+
+test('keeps virtual dataset SQL Lab URL navigation when disabled', async () => {
+  jest.mocked(isFeatureEnabled).mockReturnValue(false);
+  const openSpy = jest.spyOn(window, 'open').mockImplementation(() => null);
+  const testProps = createProps();
+
+  await asyncRender({
+    ...testProps,
+    datasource: {
+      ...testProps.datasource,
+      sql: 'SELECT * FROM fact_sales',
+      datasource_name: 'Revenue',
+      schema: 'superset_quality_21_3',
+      database: { id: 3, database_name: 'ClickHouse 21.3' },
+    },
+  });
+
+  await userEvent.click(
+    screen.getByRole('button', { name: /open sql lab in a new tab/i }),
+  );
+
+  expect(openSpy).toHaveBeenCalledWith(
+    expect.stringContaining('sql=SELECT+*+FROM+fact_sales'),
+    '_blank',
+    'noopener,noreferrer',
+  );
+  expect(mockOpenSqlLabQuery).not.toHaveBeenCalled();
+  openSpy.mockRestore();
+});
+
+test('uses a clean link for virtual dataset POST navigation', async () => {
+  jest
+    .mocked(isFeatureEnabled)
+    .mockImplementation(flag => flag === FeatureFlag.LongSqlPostNavigation);
+  const testProps = createProps();
+
+  await asyncRender(
+    {
+      ...testProps,
+      datasource: {
+        ...testProps.datasource,
+        sql: "SELECT 'secret-marker'",
+      },
+    },
+    {
+      database: {
+        queryResult: { data: [], columns: [] },
+      },
+    },
+    true,
+  );
+
+  const link = screen.getByRole('link', { name: /open in sql lab/i });
+  expect(link).toHaveAttribute('href', '/sqllab/');
+  expect(link.getAttribute('href')).not.toContain('sql=');
+
+  await userEvent.click(link);
+
+  expect(mockOpenSqlLabQuery).toHaveBeenCalledWith({
+    requestedQuery: expect.objectContaining({
+      sql: "SELECT 'secret-marker'",
+      autorun: true,
+      isDataset: true,
+    }),
+    target: 'new-tab',
+  });
+});
+
+test('shows a safe error when virtual dataset POST navigation fails', async () => {
+  jest
+    .mocked(isFeatureEnabled)
+    .mockImplementation(flag => flag === FeatureFlag.LongSqlPostNavigation);
+  const secretSql = "SELECT 'secret-marker'";
+  mockOpenSqlLabQuery.mockRejectedValueOnce(new Error(secretSql));
+  const openSpy = jest.spyOn(window, 'open');
+  const testProps = createProps();
+
+  await asyncRender({
+    ...testProps,
+    datasource: {
+      ...testProps.datasource,
+      sql: secretSql,
+    },
+  });
+
+  await userEvent.click(
+    screen.getByRole('button', { name: /open sql lab in a new tab/i }),
+  );
+
+  await waitFor(() => {
+    expect(mockAddDangerToast).toHaveBeenCalledWith(
+      'Unable to open the query in SQL Lab.',
+    );
+  });
+  expect(JSON.stringify(mockAddDangerToast.mock.calls)).not.toContain(
+    'secret-marker',
+  );
+  expect(openSpy).not.toHaveBeenCalled();
+  openSpy.mockRestore();
+});
+
+test('keeps the legacy virtual dataset SQL Lab link when disabled', async () => {
+  jest.mocked(isFeatureEnabled).mockReturnValue(false);
+  const testProps = createProps();
+
+  await asyncRender(
+    {
+      ...testProps,
+      datasource: {
+        ...testProps.datasource,
+        database: { id: 3, database_name: 'ClickHouse 21.3' },
+        sql: 'SELECT * FROM fact_sales',
+      },
+    },
+    {
+      database: {
+        queryResult: { data: [], columns: [] },
+      },
+    },
+    true,
+  );
+
+  const link = screen.getByRole('link', { name: /open in sql lab/i });
+  expect(link).toHaveAttribute(
+    'href',
+    expect.stringContaining('sql=SELECT+*+FROM+fact_sales'),
+  );
+  expect(fireEvent.click(link)).toBe(true);
+  expect(mockOpenSqlLabQuery).not.toHaveBeenCalled();
 });
 
 test('calls onChange with empty SQL when switching to physical dataset', async () => {

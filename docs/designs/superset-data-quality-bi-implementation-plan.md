@@ -19,20 +19,24 @@ under the License.
 
 # Superset 数据质量 BI 增强实施计划
 
-| 属性          | 值                                                                                                          |
-| ------------- | ----------------------------------------------------------------------------------------------------------- |
-| 文档版本      | V1.4                                                                                                        |
-| 文档状态      | Implemented（验收持续补充）                                                                                 |
-| 日期          | 2026-08-24                                                                                                  |
-| 需求输入      | 数据质量 BI 增强需求 V1.4                                                                                   |
-| 详细设计      | [数据质量 BI 增强详细设计](./superset-data-quality-bi-detailed-design.md) V1.4                              |
-| 补充设计      | [ClickHouse 21.3 兼容与 Drill Detail 表格对齐](./superset-clickhouse-21-3-drill-detail-alignment-design.md) |
-| 原始实现基线  | `dev/6.1`，`c83fb2bb1dcf`（Superset 6.1.0 RC3）                                                             |
-| 增量审计基线  | `dev/6.1`，`5f4c1760262a`                                                                                   |
-| As-built 基线 | `dev/6.1`，`ac5b40bb36`                                                                                     |
-| 数据库基线    | ClickHouse `21.3.20.1`                                                                                      |
-| 文档目标      | 规定 FR-01～FR-05 的严格实施顺序、代码内容和逐项验收门禁                                                    |
-| 功能代码状态  | FR-01～FR-05 已提交；CH-13/UI-DTD-01 为 `c18ed1fd02`；Header 色块化由 `ac5b40bb36` 实现并验证               |
+| 属性         | 值                                                                                                          |
+| ------------ | ----------------------------------------------------------------------------------------------------------- |
+| 文档版本     | V1.5                                                                                                        |
+| 文档状态     | Implemented（验收持续补充）                                                                                 |
+| 日期         | 2026-08-24                                                                                                  |
+| 需求输入     | 数据质量 BI 增强需求 V1.4                                                                                   |
+| 详细设计     | [数据质量 BI 增强详细设计](./superset-data-quality-bi-detailed-design.md) V1.4                              |
+| 补充设计     | [ClickHouse 21.3 兼容与 Drill Detail 表格对齐](./superset-clickhouse-21-3-drill-detail-alignment-design.md) |
+| 原始实现基线 | `dev/6.1`，`c83fb2bb1dcf`（Superset 6.1.0 RC3）                                                             |
+| 增量审计基线 | `dev/6.1`，`5f4c1760262a`                                                                                   |
+| 补漏前基线   | `dev/6.1`，`4b2b732ecf`                                                                                     |
+| 补漏提交     | FR5-05 DatasourceEditor 补漏为本文所在 commit；执行与证据见独立验证计划                                     |
+| 数据库基线   | ClickHouse `21.3.20.1`                                                                                      |
+| 文档目标     | 规定 FR-01～FR-05 的严格实施顺序、代码内容和逐项验收门禁                                                    |
+| 功能代码状态 | FR-01～FR-05 已提交；DatasourceEditor 的 FR5-05 漏迁移、接收端上下文恢复及事件日志脱敏已补齐                |
+
+补漏实现和发布验证债务的严格执行顺序、环境转换与证据记录归档在
+[数据质量 BI 增强补漏与验证执行计划](./superset-data-quality-bi-validation-execution-plan.md)。
 
 ## 1. 计划结论
 
@@ -800,10 +804,15 @@ export async function openSqlLabQuery(
 行为：
 
 - same-tab：React Router location state 携带 `requestedQuery`，URL 只有 `/sqllab`；
-- new-tab：`SupersetClient.postForm(ensureAppRoot('/sqllab/'),
-{form_data: safeStringify(requestedQuery)})`；
-- POST 失败显示 toast，不降级成携带 SQL 的 GET；
-- 日志只记录字符数、UTF-8 字节数、SHA-256 前 12 位和结果状态。
+- new-tab：`SupersetClient.postForm('/sqllab/',
+{form_data: safeStringify(requestedQuery)})`；`SupersetClient` 负责且只负责一次 `appRoot`
+  拼接；
+- 隐藏表单构造、认证或 `submit()` 抛错时显示 toast，不降级成携带 SQL 的 GET；该 Promise
+  不代表目标新标签页 HTTP 200，403/500 必须在目标页验证；
+- `SqllabView.root` 的 POST 事件日志对 request-derived payload 采用白名单，只记录 path、
+  字符数、UTF-8 字节数、SHA-256 前 12 位和载荷接收状态；框架 `object_ref` 与
+  action/user/duration/referrer envelope 可保留，但不记录 `form_data`、SQL、CSRF Token
+  或 Guest Token。
 
 ### 8.3 导航时序
 
@@ -826,36 +835,44 @@ sequenceDiagram
     Helper->>Client: "POST /sqllab/，form_data=safeStringify(...)"
     Client->>SqlLab: "application/x-www-form-urlencoded"
     SqlLab->>SqlLab: "json.loads(request.form['form_data'])"
+    SqlLab->>SqlLab: "事件日志白名单化并计算长度/哈希"
     SqlLab-->>Browser: "返回携带 bootstrap requestedQuery 的页面"
+    Browser->>Browser: "PopEditorTab 恢复 isDataset 等完整上下文"
     Browser-->>User: "新窗口加载完整 SQL"
   end
 ```
 
 ### 8.4 代码范围
 
-| 文件或模块                                                                   | 实现内容                              |
-| ---------------------------------------------------------------------------- | ------------------------------------- |
-| `superset-frontend/src/SqlLab/utils/openSqlLabQuery.ts`                      | 类型化统一帮助函数                    |
-| `superset-frontend/src/explore/components/controls/ViewQuery.tsx`            | 删除 `window.open(...&sql=...)`       |
-| `superset-frontend/src/explore/components/controls/ViewQueryModalFooter.tsx` | 修正 `postForm` 后端协议              |
-| `DatasourceControl/index.tsx` 和 Chart action 中相关新窗口入口               | 复用帮助函数，不重复序列化            |
-| 对应 Jest/RTL 测试                                                           | URL、form body、错误和 Unicode 完整性 |
-| SQL Lab view 集成测试                                                        | `form_data` 解析和 bootstrap 完整性   |
+| 文件或模块                                                                   | 实现内容                                 |
+| ---------------------------------------------------------------------------- | ---------------------------------------- |
+| `superset-frontend/src/SqlLab/utils/openSqlLabQuery.ts`                      | 类型化统一帮助函数                       |
+| `superset-frontend/src/explore/components/controls/ViewQuery.tsx`            | 删除 `window.open(...&sql=...)`          |
+| `superset-frontend/src/explore/components/controls/ViewQueryModalFooter.tsx` | 修正 `postForm` 后端协议                 |
+| `DatasourceControl/index.tsx` 和 Chart action 中相关新窗口入口               | 复用帮助函数，不重复序列化               |
+| `components/Datasource/.../DatasourceEditor.tsx`                             | Flag 开启时迁移按钮和文本链接的 SQL 正文 |
+| `superset-frontend/src/SqlLab/components/PopEditorTab/index.tsx`             | 恢复 dataset、数据库和查询上下文         |
+| `superset/utils/log.py`                                                      | 对 SQL Lab POST 事件日志做端点级白名单化 |
+| 对应 Jest/RTL 测试                                                           | URL、form body、错误和 Unicode 完整性    |
+| SQL Lab view 与日志测试                                                      | bootstrap 完整性和 `Log.json` 无正文     |
 
 Saved Query ID、query ID 等不包含 SQL 正文的 URL 不在替换范围内。
 
 ### 8.5 实施步骤
 
-| 步骤   | 实现内容                                            | 完成证据                            |
-| ------ | --------------------------------------------------- | ----------------------------------- |
-| FR5-01 | 加入 FR-05 Flag 和关闭态回归                        | 关闭时保持原兼容路径                |
-| FR5-02 | 定义 `RequestedQuery` 导航类型和统一帮助函数        | 无 `any`，same/new tab 单元测试通过 |
-| FR5-03 | 迁移 `ViewQuery`                                    | 新窗口 URL 不含 SQL                 |
-| FR5-04 | 迁移 `ViewQueryModalFooter` 并修正 `form_data` 包装 | 后端收到可解析 JSON                 |
-| FR5-05 | 迁移其他携带 SQL 正文的新窗口入口                   | 全仓搜索无新增 `?sql=` 路径         |
-| FR5-06 | 增加 300 行、至少 12,000 Unicode 字符逐字节测试     | CJK、emoji、换行、tab、引号均一致   |
-| FR5-07 | 验证日志、错误提示、URL、Referer 和浏览器历史       | 均不出现 SQL 正文                   |
-| FR5-08 | 完成 ClickHouse 21.3 执行型长 SQL 和最终回归        | FR-05 门禁通过                      |
+| 步骤   | 实现内容                                                  | 完成证据                             |
+| ------ | --------------------------------------------------------- | ------------------------------------ |
+| FR5-01 | 加入 FR-05 Flag 和关闭态回归                              | 关闭时保持原兼容路径                 |
+| FR5-02 | 定义 `RequestedQuery` 导航类型和统一帮助函数              | 无 `any`，same/new tab 单元测试通过  |
+| FR5-03 | 迁移 `ViewQuery`                                          | 新窗口 URL 不含 SQL                  |
+| FR5-04 | 迁移 `ViewQueryModalFooter` 并修正 `form_data` 包装       | 后端收到可解析 JSON                  |
+| FR5-05 | 迁移其他携带 SQL 正文的新窗口入口                         | 全仓搜索无新增 `?sql=` 路径          |
+| FR5-06 | 增加 300 行、至少 12,000 Unicode 字符逐字节测试           | CJK、emoji、换行、tab、引号均一致    |
+| FR5-07 | Flag=true 时验证日志、错误提示、URL、Referer 和浏览器历史 | 均不出现 SQL 正文                    |
+| FR5-08 | 完成 ClickHouse 21.3 执行型长 SQL 和最终回归              | FR-05 门禁通过                       |
+| FR5-09 | 补齐 DatasourceEditor 按钮和文本链接                      | Flag 开启时 POST；URL/Referer 无 SQL |
+| FR5-10 | 恢复 POST bootstrap 中的完整虚拟数据集上下文              | `QueryEditor.isDataset=true`         |
+| FR5-11 | 清洗 SQL Lab POST 事件日志并验证非根部署                  | `Log.json` 无正文；`appRoot` 仅一次  |
 
 ### 8.6 测试和完成定义
 
@@ -927,7 +944,8 @@ pre-commit run --all-files
 | FR-04 | `export_edge_cases`、各事实表                    | 类型、样式、长整数、多 Sheet 和原子失败 |
 | FR-05 | `complex_sql_cases`                              | 300 行长 SQL 的传输和 21.3 执行型查询   |
 
-任何一个 FR 开始前 `validate.sql` 25 项检查必须全部通过。测试数据失败时先重新 seed 或修复
+任何一个 FR 开始前 `validate.sql` 26 项检查必须全部通过。门禁必须断言恰好 26 行且均为
+`PASS`，不能只依赖 `clickhouse-client` 的退出码。测试数据失败时先重新 seed 或修复
 fixture，不得继续 UI/API 测试。
 
 ## 10. 安全、性能和可观测性实施要求
@@ -939,7 +957,8 @@ fixture，不得继续 UI/API 测试。
 - 告警客户端只提交规则 ID 和 level；
 - Dashboard export 不接受客户端 Chart 清单或 scope；
 - XLSX 防止公式注入并清除非法控制字符；
-- SQL 不进入 URL、Referer、历史、toast 或日志；
+- `LONG_SQL_POST_NAVIGATION=true` 时，FR-05 迁移入口的 SQL 不进入 URL、Referer、历史、toast
+  或日志；Flag 关闭时为兼容旧 Slice/入口保留原 URL 导航及其既有泄露风险，不得误报为安全路径；
 - API 错误不包含 SQL、筛选值、阈值、数据库错误详情或 stack trace。
 
 ### 10.2 性能
@@ -1037,7 +1056,7 @@ fixture，不得继续 UI/API 测试。
 ### FR-05 和整体完成后
 
 - [ ] 同窗口 state 和新窗口 POST 均保持长 SQL 完整；
-- [ ] URL、日志和错误信息不含 SQL；
+- [ ] `LONG_SQL_POST_NAVIGATION=true` 时 URL、Referer、历史、日志和错误信息不含 SQL；
 - [ ] 61 个详细测试用例均已有自动化实现或明确的人工验收记录；
 - [ ] 所有 Flag 关闭回归通过；
 - [ ] 已完成逐项开启和累计开启组合回归；

@@ -750,6 +750,8 @@ Sheet 名处理顺序：
 - `ViewQuery.tsx` 的 modifier-click 新窗口路径仍将 SQL 放到 query string，需要替换。
 - `ViewQueryModalFooter.tsx` 已调用 `postForm`，但当前 payload 没有包装为后端
   `request.form["form_data"]`，需要修正。
+- 虚拟数据集编辑器 `DatasourceEditor.tsx` 的顶部按钮和预览区文本链接仍通过
+  `getSQLLabUrl()` 把 `datasource.sql` 放入 query string，属于 FR5-05 的漏迁移入口。
 - `DatasourceControl` 和 chart action 中已有正确 `safeStringify` 示例，应统一复用。
 
 ### 9.2 统一导航帮助函数
@@ -773,13 +775,19 @@ export async function openSqlLabQuery(
 - `same-tab`：调用传入的 React Router navigate/history，将 `requestedQuery` 放在 location
   state，URL 只有 `/sqllab`；
 - `new-tab`：调用
-  `SupersetClient.postForm(ensureAppRoot('/sqllab/'),
-{form_data: safeStringify(requestedQuery)})`；
-- `new-tab` 不回退到 GET URL；POST 失败时显示 toast，用户仍停留在当前页；
-- 帮助函数不记录 SQL，只可记录字符数、UTF-8 字节数、SHA-256 前 12 位和结果状态。
+  `SupersetClient.postForm('/sqllab/',
+{form_data: safeStringify(requestedQuery)})`；`SupersetClient` 在内部且仅执行一次
+  `appRoot` 拼接，调用方不得预先调用 `ensureAppRoot()`；
+- `new-tab` 不回退到 GET URL；隐藏表单构造、认证准备或 `submit()` 抛错时显示 toast，
+  用户仍停留在当前页。返回的 Promise 只覆盖发起表单提交，不代表新标签页的目标 HTTP
+  请求已经返回 200，403/500 必须在目标页验证；
+- 帮助函数和事件日志不记录 SQL，只可记录字符数、UTF-8 字节数、SHA-256 前 12 位和
+  结果状态。
 
-所有 Explore “查看查询/在 SQL Lab 打开”入口改用该函数。Saved Query ID 等不携带 SQL
-正文的链接不在本需求范围内。
+所有 Explore “查看查询/在 SQL Lab 打开”入口以及虚拟数据集编辑器的按钮和文本链接均
+改用该函数。Flag 开启时，文本链接保留干净的 `/sqllab/` `href` 作为可访问性与无脚本
+降级目标，但点击必须拦截并通过 POST 打开；Saved Query ID 等不携带 SQL 正文的链接不在
+本需求范围内。
 
 ### 9.3 后端协议
 
@@ -792,9 +800,16 @@ Content-Type: application/x-www-form-urlencoded
 form_data=<safeStringify(requestedQuery)>
 ```
 
-后端 `json.loads(request.form.get("form_data"))` 后把对象交给 SQL Lab bootstrap。无需新增
-endpoint 或数据库记录。部署基线必须允许至少 256 KiB 的表单请求体，以覆盖 12,000
-Unicode 字符及请求元数据；如果反向代理限制更低，应在发布前提高限制。
+后端 `json.loads(request.form.get("form_data"))` 后把对象交给 SQL Lab bootstrap；
+`PopEditorTab` 必须恢复 `dbid`、`catalog`、`schema`、`name`、`sql`、`autorun` 和
+`isDataset`，并兼容布尔值及旧字符串布尔值。无需新增 endpoint 或业务数据库记录。
+
+`SqllabView.root` 的 POST 事件日志中，由 request 派生的 payload 必须采用端点级白名单：
+只保留请求路径、接收状态、SQL 字符数、UTF-8 字节数和 SHA-256 前 12 位；日志框架可继续
+加入 `object_ref` 及 action/user/duration/referrer envelope，但不得保留 `form_data`、SQL
+正文、CSRF Token、Guest Token 或 query string；其他 endpoint 及 SQL Lab GET 的既有日志
+行为不变。部署基线必须允许至少 256 KiB 的表单请求体，以覆盖 12,000 Unicode 字符及请求
+元数据；如果反向代理限制更低，应在发布前提高限制。
 
 ### 9.4 完整性要求
 

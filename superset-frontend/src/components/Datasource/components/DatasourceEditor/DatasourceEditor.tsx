@@ -17,7 +17,12 @@
  * under the License.
  */
 import rison from 'rison';
-import { PureComponent, useCallback, type ReactNode } from 'react';
+import {
+  PureComponent,
+  useCallback,
+  type MouseEvent,
+  type ReactNode,
+} from 'react';
 import { connect, ConnectedProps } from 'react-redux';
 import type { JsonObject } from '@superset-ui/core';
 import { type SupersetTheme } from '@apache-superset/core/theme';
@@ -79,6 +84,10 @@ import {
 import Mousetrap from 'mousetrap';
 import { clearDatasetCache } from 'src/utils/cachedSupersetGet';
 import { makeUrl } from 'src/utils/pathUtils';
+import {
+  openSqlLabQuery,
+  type SqlLabRequestedQuery,
+} from 'src/SqlLab/utils/openSqlLabQuery';
 import {
   OwnerSelectLabel,
   OWNER_TEXT_LABEL_PROP,
@@ -1156,9 +1165,38 @@ class DatasourceEditor extends PureComponent<
     return makeUrl(`/sqllab/?${queryParams.toString()}`);
   }
 
+  getSQLLabRequestedQuery(): SqlLabRequestedQuery {
+    const { datasource } = this.state;
+    return {
+      dbid: String(datasource.database?.id ?? ''),
+      sql: datasource.sql ?? '',
+      name: datasource.datasource_name ?? '',
+      catalog: datasource.catalog,
+      schema: datasource.schema ?? '',
+      autorun: true,
+      isDataset: true,
+    };
+  }
+
   openOnSqlLab() {
+    if (isFeatureEnabled(FeatureFlag.LongSqlPostNavigation)) {
+      openSqlLabQuery({
+        requestedQuery: this.getSQLLabRequestedQuery(),
+        target: 'new-tab',
+      }).catch(() =>
+        this.props.addDangerToast(t('Unable to open the query in SQL Lab.')),
+      );
+      return;
+    }
     window.open(this.getSQLLabUrl(), '_blank', 'noopener,noreferrer');
   }
+
+  handleOpenInSqlLabLink = (event: MouseEvent<HTMLAnchorElement>) => {
+    if (isFeatureEnabled(FeatureFlag.LongSqlPostNavigation)) {
+      event.preventDefault();
+      this.openOnSqlLab();
+    }
+  };
 
   tableChangeAndSyncMetadata() {
     this.validate(() => {
@@ -1771,9 +1809,14 @@ class DatasourceEditor extends PureComponent<
   renderOpenInSqlLabLink(isError = false) {
     return (
       <a
-        href={this.getSQLLabUrl()}
+        href={
+          isFeatureEnabled(FeatureFlag.LongSqlPostNavigation)
+            ? makeUrl('/sqllab/')
+            : this.getSQLLabUrl()
+        }
         target="_blank"
         rel="noopener noreferrer"
+        onClick={this.handleOpenInSqlLabLink}
         css={theme => css`
           color: ${isError ? theme.colorErrorText : theme.colorText};
           font-size: ${theme.fontSizeSM}px;
@@ -1987,6 +2030,7 @@ class DatasourceEditor extends PureComponent<
                         <Button
                           disabled={this.props.database?.isLoading}
                           tooltip={t('Open SQL Lab in a new tab')}
+                          aria-label={t('Open SQL Lab in a new tab')}
                           buttonStyle="secondary"
                           onClick={() => {
                             this.openOnSqlLab();

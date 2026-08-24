@@ -38,6 +38,8 @@ import { navigateWithState } from 'src/utils/navigationUtils';
 import getBootstrapData from 'src/utils/getBootstrapData';
 
 const SQL_LAB_URL = '/sqllab';
+const normalizeBoolean = (value: unknown): boolean =>
+  value === true || value === 'true';
 
 const PopEditorTab: React.FC = ({ children }) => {
   const [isLoading, setIsLoading] = useState(false);
@@ -68,6 +70,7 @@ const PopEditorTab: React.FC = ({ children }) => {
       catalog = undefined,
       schema = undefined,
       autorun = false,
+      isDataset = false,
       permalink = undefined,
       new: isNewQuery = undefined,
       ...restUrlParams
@@ -97,7 +100,8 @@ const PopEditorTab: React.FC = ({ children }) => {
           dbId: Number(dbid),
           catalog,
           schema,
-          autorun,
+          autorun: normalizeBoolean(autorun),
+          isDataset: normalizeBoolean(isDataset),
           sql,
         };
         dispatch(addQueryEditor(newQueryEditor));

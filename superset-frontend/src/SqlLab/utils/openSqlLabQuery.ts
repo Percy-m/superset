@@ -18,11 +18,16 @@
  */
 import { logging } from '@apache-superset/core/utils';
 import { SupersetClient } from '@superset-ui/core';
-import { ensureAppRoot } from 'src/utils/pathUtils';
 import { safeStringify } from 'src/utils/safeStringify';
 
 export interface SqlLabRequestedQuery {
   datasourceKey?: string;
+  dbid?: string | number;
+  name?: string;
+  catalog?: string;
+  schema?: string;
+  autorun?: boolean;
+  isDataset?: boolean;
   sql: string;
 }
 
@@ -94,7 +99,7 @@ export async function openSqlLabQuery(
   }
 
   try {
-    await SupersetClient.postForm(ensureAppRoot('/sqllab/'), {
+    await SupersetClient.postForm('/sqllab/', {
       form_data: safeStringify(requestedQuery),
     });
     await logNavigation(requestedQuery, target, 'success');

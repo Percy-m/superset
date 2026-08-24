@@ -17,14 +17,30 @@
  * under the License.
  */
 import { MemoryRouter } from 'react-router-dom';
-import { render, waitFor } from 'spec/helpers/testing-library';
+import { createStore, render, waitFor } from 'spec/helpers/testing-library';
+import reducerIndex from 'spec/helpers/reducerIndex';
 import fetchMock from 'fetch-mock';
 import { initialState } from 'src/SqlLab/fixtures';
+import type { QueryEditor } from 'src/SqlLab/types';
 import { Store } from 'redux';
 import { RootState } from 'src/views/store';
+import getBootstrapData from 'src/utils/getBootstrapData';
 
 import PopEditorTab from '.';
 import { LocationProvider } from 'src/pages/SqlLab/LocationContext';
+
+jest.mock('src/utils/getBootstrapData', () => ({
+  __esModule: true,
+  applicationRoot: jest.fn(() => ''),
+  default: jest.fn(() => ({
+    common: {},
+    requested_query: {},
+    user: {},
+  })),
+  staticAssetsPrefix: jest.fn(() => ''),
+}));
+
+const mockGetBootstrapData = jest.mocked(getBootstrapData);
 
 const setup = (
   url = '/sqllab',
@@ -45,6 +61,11 @@ const setup = (
   );
 
 beforeEach(() => {
+  mockGetBootstrapData.mockReturnValue({
+    common: {},
+    requested_query: {},
+    user: {},
+  } as unknown as ReturnType<typeof getBootstrapData>);
   fetchMock.get('glob:*/api/v1/database/*', {});
   fetchMock.get('glob:*/api/v1/saved_query/*', {
     result: {
@@ -128,6 +149,70 @@ test('should handle sql', () => {
     expect.anything(),
     '/sqllab',
   );
+});
+test('should hydrate complete virtual dataset context from POST bootstrap', async () => {
+  const sql = "SELECT '数据质量🙂'";
+  mockGetBootstrapData.mockReturnValue({
+    common: {},
+    requested_query: {
+      autorun: true,
+      catalog: 'analytics',
+      dbid: '7',
+      isDataset: true,
+      name: 'Revenue 数据集',
+      schema: 'superset_quality_21_3',
+      sql,
+    },
+    user: {},
+  } as unknown as ReturnType<typeof getBootstrapData>);
+  const store = createStore(initialState, reducerIndex);
+
+  setup('/sqllab', store);
+
+  await waitFor(() => {
+    const state = store.getState() as RootState;
+    const hydratedEditor = state.sqlLab.queryEditors.find(
+      (queryEditor: QueryEditor) => queryEditor.sql === sql,
+    );
+    expect(hydratedEditor).toMatchObject({
+      autorun: true,
+      catalog: 'analytics',
+      dbId: 7,
+      isDataset: true,
+      name: 'Revenue 数据集',
+      schema: 'superset_quality_21_3',
+      sql,
+    });
+  });
+});
+test('should normalize legacy string booleans from bootstrap', async () => {
+  const sql = 'SELECT legacy_boolean_context';
+  mockGetBootstrapData.mockReturnValue({
+    common: {},
+    requested_query: {
+      autorun: 'false',
+      dbid: '7',
+      isDataset: 'true',
+      sql,
+    },
+    user: {},
+  } as unknown as ReturnType<typeof getBootstrapData>);
+  const store = createStore(initialState, reducerIndex);
+
+  setup('/sqllab', store);
+
+  await waitFor(() => {
+    const state = store.getState() as RootState;
+    const hydratedEditor = state.sqlLab.queryEditors.find(
+      (queryEditor: QueryEditor) => queryEditor.sql === sql,
+    );
+    expect(hydratedEditor).toMatchObject({
+      autorun: false,
+      dbId: 7,
+      isDataset: true,
+      sql,
+    });
+  });
 });
 test('should handle custom url params', () => {
   setup('/sqllab?sql=1&dbid=1&custom_value=str&extra_attr1=true');
