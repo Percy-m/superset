@@ -21,14 +21,14 @@ under the License.
 
 | 属性          | 值                                                                                                          |
 | ------------- | ----------------------------------------------------------------------------------------------------------- |
-| 文档版本      | V1.2                                                                                                        |
+| 文档版本      | V1.3                                                                                                        |
 | 文档状态      | Implemented（验收持续补充）                                                                                 |
 | 日期          | 2026-08-24                                                                                                  |
 | 输入需求      | 《Superset 6.0 数据质量 BI 增强需求分析与设计文档》V1.4                                                     |
 | 需求来源      | [共享聊天交付件](https://chatgpt.com/share/6a7ec819-69f4-83ec-ad1e-83377e0b86dd)                            |
 | 原始设计基线  | `dev/6.1`，`c83fb2bb1dcf`（Superset 6.1.0 RC3）                                                             |
 | 增量审计基线  | `dev/6.1`，`5f4c1760262a`                                                                                   |
-| As-built 基线 | `dev/6.1`，`c18ed1fd02`                                                                                     |
+| As-built 基线 | `dev/6.1`，`0da4a89de1`                                                                                     |
 | 补充设计      | [ClickHouse 21.3 兼容与 Drill Detail 表格对齐](./superset-clickhouse-21-3-drill-detail-alignment-design.md) |
 | 目标读者      | 负责该 Superset 分支实现、评审、测试与发布的工程师                                                          |
 
@@ -390,8 +390,9 @@ interface AlertRuleExtension {
 Table Header 按 subject 展示三个图标式多选项，不直接显示内部枚举文字。没有对应可筛选
 规则的等级 disabled。图标、形状和主题色固定映射如下：
 
-> As-built FR-02 提交 `a8b507c29a` 仍把 `RED/YELLOW/GREEN` 作为菜单可见文字；本节是
-> V1.2 批准的前端展示 follow-up，尚未包含在 `c18ed1fd02`，不得标记为已实现。
+> FR-02 原提交 `a8b507c29a` 把 `RED/YELLOW/GREEN` 作为菜单可见文字；
+> `FR2-UI-FOLLOWUP-01` 已由 `0da4a89de1` 实现。该提交只改变 Header 展示与可访问语义，
+> 不改变内部枚举、DataMask、QueryObject 或服务端协议。
 
 | 内部等级 | 可见图标                    | 主题色               | Tooltip / 可访问语义 |
 | -------- | --------------------------- | -------------------- | -------------------- |
@@ -883,15 +884,16 @@ SQL、数据库错误原文、过滤值或数据样本。
 门禁见
 [数据质量 BI 增强实施计划](./superset-data-quality-bi-implementation-plan.md)。
 
-| 范围             | As-built 提交 |
-| ---------------- | ------------- |
-| FR-01            | `de65297208`  |
-| FR-02            | `a8b507c29a`  |
-| FR-03            | `f02a5937b4`  |
-| FR-04            | `8e7dcabcd7`  |
-| FR-05            | `5f4c176026`  |
-| FR-01 分页可见性 | `dee7616f21`  |
-| CH-13、UI-DTD-01 | `c18ed1fd02`  |
+| 范围               | As-built 提交 |
+| ------------------ | ------------- |
+| FR-01              | `de65297208`  |
+| FR-02              | `a8b507c29a`  |
+| FR-03              | `f02a5937b4`  |
+| FR-04              | `8e7dcabcd7`  |
+| FR-05              | `5f4c176026`  |
+| FR-01 分页可见性   | `dee7616f21`  |
+| CH-13、UI-DTD-01   | `c18ed1fd02`  |
+| FR2-UI-FOLLOWUP-01 | `0da4a89de1`  |
 
 ### 阶段 1：FR-01
 
@@ -946,8 +948,12 @@ SQL、数据库错误原文、过滤值或数据样本。
 
 - Jest/RTL：ruleId 生成/保留/复制、可筛选条件校验、Header 等级多选、disabled/选中/键盘
   状态和 ownState。
-- `[未实现 Follow-up]` Jest/RTL：Header 图标、Tooltip、可访问名称和主题色；界面不暴露
-  原始大写枚举文字，并保留 `menuitemcheckbox`、选中勾与键盘行为。
+- Jest/RTL As-built：`TableChart.test.tsx`、`buildQuery.test.ts` 与
+  `FormattingPopoverContent.test.tsx` 共 110 项通过，覆盖 Header 图标、Tooltip、隐藏可访问
+  名称、主题色、Feature Flag、`menuitemcheckbox`、选中勾、鼠标与键盘状态，并确认协议和
+  Explore 编辑器不变。
+- 本机 UI：Dashboard 3 的 `gross_revenue` Warning 筛选经鼠标和 Enter 键均使记录数
+  `97 → 48`，取消后恢复 `97`；触发器在 link/primary 间切换，菜单不显示内部枚举文字。
 - Unit：同 subject OR、不同 subject AND、物理列 WHERE、保存指标 HAVING。
 - Unit：伪造 UUID、level 不匹配、旧规则、adhoc metric、Cell Bar 和非法 operator。
 - Query tests：data、rowcount、totals、server pagination 和 download 使用相同过滤关系。
@@ -1013,6 +1019,12 @@ SQL、数据库错误原文、过滤值或数据样本。
 | AC-15 | FR-04 | 公式注入、长整数、Sheet 名、控制字符和权限边界正确处理                      | Security + unit              |
 | AC-16 | FR-05 | 300 行、12,000 Unicode 字符通过 request body 无损进入 SQL Lab，URL 不含 SQL | Frontend + Flask integration |
 | AC-17 | 全部  | Flag 默认关闭，无数据库迁移，旧 Slice/Permalink/Samples/XLSX 保持兼容       | Regression                   |
+
+V1.3 增量验收不改变 AC-01～AC-17 编号：
+
+| 增量 AC   | 范围               | 可验证结果                                                                      | 主要测试层级            |
+| --------- | ------------------ | ------------------------------------------------------------------------------- | ----------------------- |
+| ADD-AC-03 | FR2-UI-FOLLOWUP-01 | 三档使用不同图标和主题色；Tooltip、a11y、键盘和选中勾正确；内部筛选协议保持不变 | Frontend unit + 本机 UI |
 
 ## 15. 发布、回滚与运维
 
@@ -1231,10 +1243,20 @@ REST 和权限用例标记 Environment Blocked，不得伪报通过。
 | TC-FR02-11 | 重叠背景/文字/整行规则            | 导出并读取 workbook styles            | 每个样式维度最后一个命中规则生效，与前端 fixture 一致      |
 | TC-FR02-12 | APAC RLS + GREEN 告警             | 查询/导出                             | RLS 先约束事实集合，告警在授权结果上求值，不能越权         |
 
-`FR2-UI-FOLLOWUP-01（未实现）`：把 Header 的 `RED/YELLOW/GREEN` 可见文字替换为
-`StopOutlined`、`WarningOutlined`、`CheckCircleOutlined`，验证主题色、Tooltip、本地化隐藏
-文本、`menuitemcheckbox`、`aria-checked`、disabled、选中勾和键盘操作；此项不计入上述
-12 个 As-built FR-02 用例，也不改变 61 个详细用例的统计口径。
+`FR2-UI-FOLLOWUP-01（As-built：0da4a89de1）` 是增量展示验收，不计入上述 12 个
+FR-02 用例，也不改变原 61 个详细用例的统计口径：
+
+| ID            | 检查点                                    | 自动化或实测证据                                              | 结果 |
+| ------------- | ----------------------------------------- | ------------------------------------------------------------- | ---- |
+| TC-FR02-UI-01 | 三档图标、形状和主题色                    | Stop/Warning/CheckCircle 与 error/warning/success token 断言  | PASS |
+| TC-FR02-UI-02 | Tooltip、隐藏文本和可访问名称             | hover/focus Tooltip、visually-hidden 样式和无原始枚举文字断言 | PASS |
+| TC-FR02-UI-03 | checkbox、checked、disabled、选中勾和键盘 | RTL role/state 断言；本机 Enter 选择和取消                    | PASS |
+| TC-FR02-UI-04 | DataMask 协议与分页重置                   | `{ruleId, level}` 和 `currentPage: 0` 断言；buildQuery 回归   | PASS |
+| TC-FR02-UI-05 | Flag 关闭与 Explore 编辑器兼容            | Flag 关闭无入口；FormattingPopoverContent 回归                | PASS |
+| TC-FR02-UI-06 | 触发器样式与真实服务筛选                  | 本机 Dashboard 3 link/primary 切换，Warning `97 → 48 → 97`    | PASS |
+
+目标 Jest 命令覆盖三个测试文件，共 `110/110` 通过；`npm run type`、目标 pre-commit、
+浏览器鼠标/键盘验收和 `git diff --check` 均通过。
 
 ### 18.4 FR-03 测试用例
 
