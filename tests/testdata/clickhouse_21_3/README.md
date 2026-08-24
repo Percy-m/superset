@@ -42,9 +42,11 @@ and oversized payloads are intentional fixtures, not accidental quality defects.
 
 ## Validated baseline
 
-The local validation on 2026-08-14 used ClickHouse `21.3.20.1` and produced
-eight physical tables, one view, and 92,000 physical rows. All 25 checks in
-`validate.sql` passed. Selected profile evidence:
+The initial local validation on 2026-08-14 used ClickHouse `21.3.20.1` and
+produced eight physical tables, one view, and 92,000 physical rows. All 25
+checks available at that time passed. The validation gate was extended and
+rerun without reseeding on 2026-08-24; all 26 checks passed, including the
+seven-unit lowercase `dateTrunc` equivalence check. Selected profile evidence:
 
 | Check                                 |                               Observed |
 | ------------------------------------- | -------------------------------------: |
@@ -58,11 +60,14 @@ eight physical tables, one view, and 92,000 physical rows. All 25 checks in
 | First 20 payload bytes                |                              9,175,040 |
 | Largest cell                          |                        1,200,000 bytes |
 | Long SQL fixture                      |               300 lines / 14,400 bytes |
+| Lowercase `dateTrunc` mismatches      |  minute through year: 0 for every unit |
 
 ## Build and validate
 
 The helper checks the server version, rebuilds only the named fixture objects,
-and runs all validation queries:
+and runs all validation queries. It accepts the result only when it contains
+exactly 26 `TabSeparatedRaw` rows, ordered from 1 through 26, with four columns,
+unique nonempty check names, and a `PASS` status for every row:
 
 ```bash
 scripts/tests/seed_clickhouse_21_3.sh
@@ -75,6 +80,21 @@ CLICKHOUSE_TEST_CONTAINER=my-clickhouse-21-3 \
   scripts/tests/seed_clickhouse_21_3.sh
 ```
 
+Validate existing fixtures without running `seed.sql`, `DROP`, `CREATE`, or
+`INSERT` statements:
+
+```bash
+scripts/tests/seed_clickhouse_21_3.sh --validate-only
+```
+
+The strict output parser can also check captured output from a file or stdin.
+These modes do not connect to Docker:
+
+```bash
+scripts/tests/seed_clickhouse_21_3.sh --check-output validation.tsv
+scripts/tests/seed_clickhouse_21_3.sh --check-output - < validation.tsv
+```
+
 Equivalent direct commands:
 
 ```bash
@@ -83,6 +103,9 @@ docker exec -i superset-clickhouse-21-3 clickhouse-client --multiquery \
 docker exec -i superset-clickhouse-21-3 clickhouse-client --multiquery \
   < tests/testdata/clickhouse_21_3/validate.sql
 ```
+
+The direct validation command does not apply the helper's 26-row protocol
+checks, so use `--validate-only` for the executable test gate.
 
 The seed is idempotent by replacement: it drops and recreates only the listed
 tables/view inside `superset_quality_21_3`. Do not put manual data in this test

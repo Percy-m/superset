@@ -323,12 +323,44 @@ legacy `clickhouse` 与 ClickHouse Connect `clickhousedb` 两个 engine key 都�
 | `TC-CH13-11` | Regression  | parse、transpile、executor、celery 全文件               | 锁定 SQLGlot 28.10.0 下全部通过                             |
 | `TC-CH13-12` | Runtime     | 本机 Superset API 与 ClickHouse 21.3                    | 图表及 SQL Lab 七粒度成功，无 SQL 泄漏                      |
 
-原设计计划将 `validate.sql` 从 25 项增至 26 项，新增一个组合查询，对七种小写
-`dateTrunc` 与 `toStartOf*` 结果做等价断言；As-built `c18ed1fd02` 未修改该文件，此项
-保留为发布前待补门禁。大写 Code 36 是预期失败测试，应由独立 helper/API 测试捕获，
-不能放进会中止的普通 multiquery PASS 门禁。
+As-built `c18ed1fd02` 未修改 `validate.sql`；后续验证债务实现已将门禁从 25 项扩展为
+恰好 26 项。第 26 项在 12,000 行 `fact_events` 上分别输出 minute、hour、day、week、
+month、quarter、year 的 mismatch，其中 week 以 `toMonday` 为基线，其余粒度以对应
+`toStartOf*` 为基线。Shell 门禁还会独立校验四列协议、1～26 顺序、非空唯一名称和全
+`PASS`，`--validate-only` 不运行 seed 或 DDL。大写 Code 36 是预期失败测试，应由独立
+helper/API 测试捕获，不能放进会中止的普通 multiquery PASS 门禁。
 
-### 4.8 发布与回滚
+### 4.8 驱动反射归一化（验证债务）
+
+connect `0.13.0` 与 `0.15.1` 的 SQLAlchemy inspector 都把普通 View 包含在
+`get_table_names()` 中，同时让 `get_view_names()` 返回空集合。Superset 不能把这一驱动
+限制暴露成 9 table/0 view，因此在共享 `ClickHouseBaseEngineSpec` 沿用 Presto 的关系
+归一化模式：显式 schema 通过 `%(schema)s` 绑定查询 `system.tables`，缺省 schema 使用
+`currentDatabase()`；`get_table_names()` 再扣除查得的普通 View。
+
+```mermaid
+flowchart LR
+  I["Driver inspector: 9 table / 0 view"] --> B["ClickHouseBaseEngineSpec"]
+  S["schema 参数"] -->|"绑定，不拼接"| Q["system.tables: engine = View"]
+  D["schema 缺省"] -->|"currentDatabase()"| Q
+  Q --> V["1 ordinary View"]
+  B --> T["raw tables - views = 8 tables"]
+  V --> T
+  T --> A["Superset API: 8 table + 1 view"]
+  A --> U["SQL Lab: View 图标与列展开"]
+```
+
+实现放在共享基类后只影响 `clickhouse` 与 `clickhousedb`；MySQL、PostgreSQL 和 YQL 的
+继承链不经过该逻辑。只把 `engine='View'` 归类为普通 View，`MaterializedView` 保持既有
+Table 行为，避免扩大本补丁范围。元数据查询失败必须走现有 DBAPI 异常映射，不能静默退回
+错误的 9/0 分类。
+
+真实 ClickHouse `21.3.20.1` 上，active `0.15.1` 与 shadow `0.13.0` 均得到 8/1，
+`drill_wide_flat` 的 10,000 行查询和 52 列展开成功；tables API 返回 count=9、8 table、
+1 view 且 relation name 无重复。EngineSpec 的五个安装承载点与生成数据库快照同步为
+`clickhouse-connect>=0.13.0,<1.0`，并由单测与 `pyproject.toml` 做语义比对。
+
+### 4.9 发布与回滚
 
 `CH-13` 不设 Feature Flag。由于 As-built 与 UI-DTD-01 合并在 `c18ed1fd02`，直接
 revert 会同时撤销两项修正；仅回滚 ClickHouse 时应先拆出该提交中的四个后端/测试文件

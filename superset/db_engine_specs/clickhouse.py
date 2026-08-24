@@ -45,6 +45,8 @@ from superset.utils.core import GenericDataType
 from superset.utils.network import is_hostname_valid, is_port_open
 
 if TYPE_CHECKING:
+    from sqlalchemy.engine.reflection import Inspector
+
     from superset.models.core import Database
 
 logger = logging.getLogger(__name__)
@@ -134,6 +136,49 @@ class ClickHouseBaseEngineSpec(BaseEngineSpec):
         if isinstance(sqla_type, types.DateTime):
             return f"""toDateTime('{dttm.isoformat(sep=" ", timespec="seconds")}')"""
         return None
+
+    @classmethod
+    def get_table_names(
+        cls,
+        database: Database,
+        inspector: Inspector,
+        schema: str | None,
+    ) -> set[str]:
+        """Return physical tables without views included by ClickHouse drivers."""
+
+        return super().get_table_names(
+            database, inspector, schema
+        ) - cls.get_view_names(database, inspector, schema)
+
+    @classmethod
+    def get_view_names(
+        cls,
+        database: Database,
+        inspector: Inspector,
+        schema: str | None,
+    ) -> set[str]:
+        """Return ordinary views from ClickHouse system metadata."""
+
+        if schema:
+            sql = (
+                "SELECT name FROM system.tables "
+                "WHERE database = %(schema)s AND engine = 'View'"
+            )
+            params = {"schema": schema}
+        else:
+            sql = (
+                "SELECT name FROM system.tables "
+                "WHERE database = currentDatabase() AND engine = 'View'"
+            )
+            params = {}
+
+        try:
+            with database.get_raw_connection(schema=schema) as connection:
+                cursor = connection.cursor()
+                cursor.execute(sql, params)
+                return {row[0] for row in cursor.fetchall()}
+        except Exception as ex:
+            raise cls.get_dbapi_mapped_exception(ex) from ex
 
 
 class ClickHouseEngineSpec(ClickHouseBaseEngineSpec):
@@ -287,13 +332,14 @@ class ClickHouseConnectEngineSpec(BasicParametersMixin, ClickHouseEngineSpec):
             DatabaseCategory.ANALYTICAL_DATABASES,
             DatabaseCategory.OPEN_SOURCE,
         ],
-        "pypi_packages": ["clickhouse-connect>=0.13.0"],
+        "pypi_packages": ["clickhouse-connect>=0.13.0,<1.0"],
+        "version_requirements": "clickhouse-connect>=0.13.0,<1.0",
         "connection_string": "clickhousedb://{username}:{password}@{host}:{port}/{database}",
         "default_port": 8123,
         "drivers": [
             {
                 "name": "clickhouse-connect (Recommended)",
-                "pypi_package": "clickhouse-connect>=0.13.0",
+                "pypi_package": "clickhouse-connect>=0.13.0,<1.0",
                 "connection_string": (
                     "clickhousedb://{username}:{password}@{host}:{port}/{database}"
                 ),
@@ -329,7 +375,7 @@ class ClickHouseConnectEngineSpec(BasicParametersMixin, ClickHouseEngineSpec):
             },
         ],
         "install_instructions": (
-            'echo "clickhouse-connect>=0.13.0" >> ./docker/requirements-local.txt'
+            'echo "clickhouse-connect>=0.13.0,<1.0" >> ./docker/requirements-local.txt'
         ),
         "compatible_databases": [
             {
@@ -346,7 +392,7 @@ class ClickHouseConnectEngineSpec(BasicParametersMixin, ClickHouseEngineSpec):
                     DatabaseCategory.CLOUD_DATA_WAREHOUSES,
                     DatabaseCategory.HOSTED_OPEN_SOURCE,
                 ],
-                "pypi_packages": ["clickhouse-connect>=0.13.0"],
+                "pypi_packages": ["clickhouse-connect>=0.13.0,<1.0"],
                 "connection_string": (
                     "clickhousedb://{username}:{password}@{host}:8443/{database}?secure=true"
                 ),
@@ -371,7 +417,7 @@ class ClickHouseConnectEngineSpec(BasicParametersMixin, ClickHouseEngineSpec):
                     DatabaseCategory.CLOUD_DATA_WAREHOUSES,
                     DatabaseCategory.HOSTED_OPEN_SOURCE,
                 ],
-                "pypi_packages": ["clickhouse-connect>=0.13.0"],
+                "pypi_packages": ["clickhouse-connect>=0.13.0,<1.0"],
                 "connection_string": (
                     "clickhousedb://{username}:{password}@{host}/{database}?secure=true"
                 ),

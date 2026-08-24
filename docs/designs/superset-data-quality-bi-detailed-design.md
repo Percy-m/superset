@@ -1097,12 +1097,21 @@ V1.4 增量验收不改变 AC-01～AC-17 编号：
 | 测试数据库              | `superset_quality_21_3`                                                |
 | 数据规模                | 8 张物理表、1 个视图、92,000 行                                        |
 | Superset SQLAlchemy URI | `clickhousedb+connect://default:@127.0.0.1:8123/superset_quality_21_3` |
-| 本机 Python 驱动        | `clickhouse-connect 1.3.0`，连接与查询验证通过                         |
+| 初始本机 Python 驱动    | `clickhouse-connect 1.3.0`，高于项目声明上界，仅作为环境漂移基线       |
+| 验证后主 Python 驱动    | `clickhouse-connect 0.15.1`；下界 `0.13.0` 在独立 shadow 中通过        |
 | Superset 服务           | 后端 `localhost:8088`、前端 `localhost:9001` 已启动并完成本机增量验收  |
 
-本地 Python 驱动版本高于仓库 `pyproject.toml` 声明的
-`clickhouse-connect>=0.13.0,<1.0` 范围，因此“本机连接成功”不能代替依赖范围内的 CI
-矩阵。实现验收必须同时覆盖声明范围的最低版本和锁文件实际解析版本。
+初始本地 Python 驱动版本高于仓库 `pyproject.toml` 声明的
+`clickhouse-connect>=0.13.0,<1.0` 范围，因此初始“本机连接成功”不能代替依赖范围内的
+CI 矩阵。2026-08-24 已先在隔离 shadow 中验证 `0.15.1`，再把主 venv 回退到该版本；最低
+版本 `0.13.0` 在第二个 shadow 中通过 120 项单测和真实 21.3 七粒度查询。两版旧驱动的
+SQLAlchemy inspector 都把 1 个 View 合并进 table 列表，原始结果为 tables=9/views=0。
+Superset 在共享 `ClickHouseBaseEngineSpec` 中通过绑定参数读取 `system.tables` 的普通
+`View`，并从 table 集合中扣除，两个驱动版本均归一化为 tables=8/views=1；View 的
+10,000 行查询、HTTP tables API 和 SQL Lab 关系树/列展开均通过。该归一化只进入
+`clickhouse`、`clickhousedb` 的继承链，不影响 MySQL/PostgreSQL。EngineSpec、推荐驱动、
+安装命令和两个兼容服务的依赖说明也统一为 `clickhouse-connect>=0.13.0,<1.0`，与
+`pyproject.toml` 一致。
 
 数据质量实测证据：
 
@@ -1120,7 +1129,9 @@ V1.4 增量验收不改变 AC-01～AC-17 编号：
 | 最大单元格                       |         1,200,000 bytes | 可验证 1 MiB 单元格上限          |
 | 长 SQL                           |   300 行 / 14,400 bytes | 满足 FR-05 最低传输要求          |
 
-所有 25 项 `validate.sql` 检查均为 PASS。初次构建还确认了两项 21.3 差异：
+2026-08-14 初次构建时已有的 25 项 `validate.sql` 检查均为 PASS；2026-08-24 在不重新
+seed 的前提下增加第 26 项七粒度小写 `dateTrunc` 等价检查并再次得到 26/26 PASS。初次
+构建还确认了两项 21.3 差异：
 
 - 21.3 不提供较新版本中的 `leftPad`，fixture 和产品 SQL 均不得依赖该函数；
 - 21.3 的向量化 `if` 会为整块计算大字符串分支，数据生成必须把大对象行拆成小批次，
@@ -1142,6 +1153,8 @@ V1.4 增量验收不改变 AC-01～AC-17 编号：
 | CH-10 | 查询限制               | 继续使用应用层 row/page/byte 上限；不得依赖 21.3 之后新增的 query settings；深分页和导出受现有 timeout、`ROW_LIMIT` 控制                                       |
 | CH-11 | 长 SQL                 | “传输完整”与“21.3 可执行”分开验收；传输可包含任意文本，执行型 fixture 只能使用 21.3 已支持的 SQL 语法                                                          |
 | CH-12 | 可重复数据             | 每次测试前运行版本门禁和 `validate.sql`；任一数据质量检查失败时禁止继续 UI/API 测试，先重新 seed 或修复 fixture                                                |
+| CH-R1 | Table/View 反射归一化  | 驱动 raw inspector 的 9/0 由共享 ClickHouse EngineSpec 归一化为 8/1；schema 使用绑定参数，缺省 schema 使用 `currentDatabase()`，普通 View 不再伪装成 Table     |
+| CH-R2 | 驱动版本说明一致       | EngineSpec metadata、生成的数据库快照和 `pyproject.toml` 都声明 `clickhouse-connect>=0.13.0,<1.0`；不得引导安装未纳入支持范围的 1.x                            |
 
 ### 17.3 各需求的 ClickHouse 落地补充
 
@@ -1199,7 +1212,8 @@ V1.4 增量验收不改变 AC-01～AC-17 编号：
 测试资产归档在：
 
 - `tests/testdata/clickhouse_21_3/seed.sql`：幂等重建专用 fixture；
-- `tests/testdata/clickhouse_21_3/validate.sql`：25 项版本、规模、完整性和边界检查；
+- `tests/testdata/clickhouse_21_3/validate.sql`：26 项版本、规模、完整性、边界和七粒度
+  `dateTrunc` 等价检查；
 - `tests/testdata/clickhouse_21_3/README.md`：表粒度、场景映射和连接说明；
 - `scripts/tests/seed_clickhouse_21_3.sh`：版本门禁、seed 和 validate 一键入口。
 
@@ -1210,7 +1224,8 @@ V1.4 增量验收不改变 AC-01～AC-17 编号：
 
 ### 18.1 测试执行前置
 
-1. 执行 `scripts/tests/seed_clickhouse_21_3.sh`；退出码必须为 0，25 项检查全部 PASS。
+1. 执行 `scripts/tests/seed_clickhouse_21_3.sh`；退出码必须为 0，严格四列协议的 26 项检查
+   全部 PASS。
 2. 以 ClickHouse Connect URI 注册 `superset_quality_21_3`，同步 8 张物理表和
    `drill_wide_flat` 视图。
 3. 建立以下保存对象：
@@ -1339,7 +1354,7 @@ REST 和权限用例标记 Environment Blocked，不得伪报通过。
 
 | 层级                | 自动化内容                                                  | 通过标准                                 |
 | ------------------- | ----------------------------------------------------------- | ---------------------------------------- |
-| Seed gate           | Server version、DDL/DML、25 项 `validate.sql`               | 全部 PASS，否则立即停止                  |
+| Seed gate           | Server version、DDL/DML、26 项 `validate.sql`               | 全部 PASS，否则立即停止                  |
 | Python unit         | Schema、rule resolver、state sanitizer、Excel formatter     | 分支与边界覆盖，无真实 DB 依赖           |
 | Frontend unit       | 控件、Header、DataMask、hydrate gate、SQL navigation        | Jest/RTL 全部通过，无 `any`/Enzyme       |
 | ClickHouse contract | SQLAlchemy metadata、参数 ILIKE、OFFSET、WHERE/HAVING、类型 | 21.3 + driver matrix 全部通过            |

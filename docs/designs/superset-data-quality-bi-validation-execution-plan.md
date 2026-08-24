@@ -188,18 +188,30 @@ shadow 环境命令模板如下；两个版本必须使用不同目录，代理�
 
 ```bash
 CH0151_SHADOW="$(mktemp -d /private/tmp/superset-clickhouse-connect-0.15.1.XXXXXX)"
-venv/bin/python -m pip install --target "$CH0151_SHADOW" 'clickhouse-connect==0.15.1'
 env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
   -u http_proxy -u https_proxy -u all_proxy \
-  PYTHONPATH="$CH0151_SHADOW" \
   NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost \
-  venv/bin/python -c 'import clickhouse_connect; print(clickhouse_connect.__version__)'
+  venv/bin/python -m pip install --disable-pip-version-check --no-cache-dir \
+  --no-deps --target "$CH0151_SHADOW" 'clickhouse-connect==0.15.1'
+PYTHONPATH="$CH0151_SHADOW" venv/bin/python -c \
+  'from importlib.metadata import version; assert version("clickhouse-connect") == "0.15.1"'
 
 CH0130_SHADOW="$(mktemp -d /private/tmp/superset-clickhouse-connect-0.13.0.XXXXXX)"
-venv/bin/python -m pip install --target "$CH0130_SHADOW" 'clickhouse-connect==0.13.0'
+env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
+  -u http_proxy -u https_proxy -u all_proxy \
+  NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost \
+  venv/bin/python -m pip install --disable-pip-version-check --no-cache-dir \
+  --no-deps --target "$CH0130_SHADOW" 'clickhouse-connect==0.13.0'
 
 LEGACY_SHADOW="$(mktemp -d /private/tmp/superset-clickhouse-sqlalchemy-0.2.9.XXXXXX)"
-venv/bin/python -m pip install --target "$LEGACY_SHADOW" \
+env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
+  -u http_proxy -u https_proxy -u all_proxy \
+  venv/bin/python -m pip install --dry-run --ignore-installed \
+  --constraint requirements/base.txt 'clickhouse-sqlalchemy==0.2.9'
+env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
+  -u http_proxy -u https_proxy -u all_proxy \
+  venv/bin/python -m pip install --disable-pip-version-check --no-cache-dir \
+  --target "$LEGACY_SHADOW" \
   --constraint requirements/base.txt 'clickhouse-sqlalchemy==0.2.9'
 PYTHONPATH="$LEGACY_SHADOW" venv/bin/python -c \
   'import sqlalchemy; assert sqlalchemy.__version__ == "1.4.54"'
@@ -216,6 +228,12 @@ engine = create_engine(
 with engine.connect() as connection:
     assert str(connection.execute(text("SELECT version()")).scalar()).startswith("21.3.")
 PY
+
+# 只有 shadow 0.15.1 与 26/26 gate 通过后才允许执行主 venv 回退。
+env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
+  -u http_proxy -u https_proxy -u all_proxy \
+  venv/bin/python -m pip install --disable-pip-version-check --no-cache-dir \
+  --no-deps --force-reinstall 'clickhouse-connect==0.15.1'
 ```
 
 版本转换后必须重启 Flask；仅执行 `pip show` 不算验证。前端 dev server无需因 Python
@@ -245,19 +263,20 @@ statement 异步 SQL，并比对 cursor SQL 与 `executed_sql`。结束时仅按
 
 ### 4.3 验证矩阵
 
-| ID       | 范围                         | 关键检查                                                                 |
-| -------- | ---------------------------- | ------------------------------------------------------------------------ |
-| `V2-T01` | 服务与数据基线               | Superset health、CH `21.3.x`、8 表+1 view、92k 行、26/26 门禁            |
-| `V2-T02` | Connect `0.15.1`             | 七种 dateTrunc 小写、真实查询、Chart/Data API                            |
-| `V2-T03` | Connect `0.13.0`             | 最低声明版本可导入、连接、执行七粒度                                     |
-| `V2-T04` | MySQL/PostgreSQL/YQL 回归    | dialect 映射和 SQL 输出不变                                              |
-| `V2-T05` | seed gate 自检               | 四列协议、26 行/顺序/唯一名称/PASS；负例非零；validate-only 元数据不变   |
-| `V3-T01` | legacy clickhouse-sqlalchemy | `0.2.9` + SQLAlchemy `1.4.54`；native 9000；真实 21.3 查询与错误分类     |
-| `V3-T02` | SQL Lab 同步                 | cursor SQL 和 `executed_sql` 都使用小写静态粒度                          |
-| `V3-T03` | SQL Lab 异步/Celery runtime  | 唯一 Redis/Celery runtime；单/多 statement 解析与最终 SQL 一致；精确清理 |
-| `V3-T04` | raw connector Code 36        | 直接发送大写 unit 时 21.3 受控失败                                       |
-| `V3-T05` | Superset 正常链路            | 静态 unit 被转小写并成功；`executed_sql` 与 cursor 一致                  |
-| `V3-T06` | 受控错误脱敏                 | 独立无敏感值失败不向 API/日志泄露 SQL                                    |
+| ID       | 范围                         | 关键检查                                                                  |
+| -------- | ---------------------------- | ------------------------------------------------------------------------- |
+| `V2-T01` | 服务与数据基线               | Superset health、CH `21.3.x`、8 表+1 view、92k 行、26/26 门禁             |
+| `V2-T02` | Connect `0.15.1`             | 七种 dateTrunc 小写、真实查询、Chart/Data API                             |
+| `V2-T03` | Connect `0.13.0`             | 最低声明版本可导入、连接、执行七粒度                                      |
+| `V2-T04` | MySQL/PostgreSQL/YQL 回归    | dialect 映射和 SQL 输出不变                                               |
+| `V2-T05` | seed gate 自检               | 四列协议、26 行/顺序/唯一名称/PASS；负例非零；validate-only 元数据不变    |
+| `V2-T06` | relation 分类与安装边界      | connect 0.13/0.15 均归一化为 8 table+1 view；API/UI 正确；metadata `<1.0` |
+| `V3-T01` | legacy clickhouse-sqlalchemy | `0.2.9` + SQLAlchemy `1.4.54`；native 9000；真实 21.3 查询与错误分类      |
+| `V3-T02` | SQL Lab 同步                 | cursor SQL 和 `executed_sql` 都使用小写静态粒度                           |
+| `V3-T03` | SQL Lab 异步/Celery runtime  | 唯一 Redis/Celery runtime；单/多 statement 解析与最终 SQL 一致；精确清理  |
+| `V3-T04` | raw connector Code 36        | 直接发送大写 unit 时 21.3 受控失败                                        |
+| `V3-T05` | Superset 正常链路            | 静态 unit 被转小写并成功；`executed_sql` 与 cursor 一致                   |
+| `V3-T06` | 受控错误脱敏                 | 独立无敏感值失败不向 API/日志泄露 SQL                                     |
 
 ## 5. V4～V8：功能与浏览器验证
 
@@ -365,21 +384,27 @@ ID | PASS/FAIL/BLOCKED | 环境/版本 | 命令或操作 | 关键断言 | 日志
 
 ## 7. 执行记录
 
-| ID            | 状态    | 环境/版本                                   | 证据                                                                                                                                                                                                         |
-| ------------- | ------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `V0-T01`      | PASS    | Superset `8088`、frontend `9001`，18:07 CST | `curl /health=200`；浏览器 Dataset 编辑器可交互；Flask session `35214`                                                                                                                                       |
-| `V0-T02`      | PASS    | Git `dev/6.1@4b2b732ecf`，2026-08-24        | `git rev-parse HEAD`；`git status --short --branch`，用户路径未纳入改动                                                                                                                                      |
-| `V1-T01～T05` | PASS    | Jest，Node 22                               | DatasourceEditor 与 helper 正向、负向和关闭态兼容用例通过                                                                                                                                                    |
-| `V1-T06～T08` | PASS    | Jest + pytest，Node 22 / Python 3.11        | bootstrap、PopEditor hydration、事件日志白名单用例通过                                                                                                                                                       |
-| `V1-T09`      | PASS    | Jest，`appRoot=''` 与 `/prefix`             | SupersetClient form action 契约通过                                                                                                                                                                          |
-| `V1-T10`      | PASS    | 本机浏览器 + ClickHouse 21.3                | 按钮/文本链接均打开 clean `/sqllab`；dataset 提示、schema、查询和结果恢复；`Log.referrer` 为不含 SQL 的 Dataset list URL                                                                                     |
-| `V1-LOG`      | PASS    | metadata `Log.id=3643`                      | request payload 仅含 path/accepted/长度/字节/哈希和框架 `object_ref`；SQL、form_data、Token 命中均为 0                                                                                                       |
-| `V1-BASELINE` | BLOCKED | 完整既有 `sqllab_tests.py`                  | 13 passed/12 skipped/5 failed；本机 integration metadata 缺少 `can_read SqllabView` 与 `can_execute_sql_query SQLLab`，导致既有权限 fixture 用例为空结果、302 或 403；Redis 连接错误为伴随噪声，不是直接根因 |
-| `V2-*`        | PENDING | —                                           | —                                                                                                                                                                                                            |
-| `V3-*`        | PENDING | —                                           | —                                                                                                                                                                                                            |
-| `V4-*`        | PENDING | —                                           | —                                                                                                                                                                                                            |
-| `V5-*`        | PENDING | —                                           | —                                                                                                                                                                                                            |
-| `V6-*`        | PENDING | —                                           | —                                                                                                                                                                                                            |
-| `V7-*`        | PENDING | —                                           | —                                                                                                                                                                                                            |
-| `V8-*`        | PENDING | —                                           | —                                                                                                                                                                                                            |
-| `V9-*`        | PENDING | —                                           | —                                                                                                                                                                                                            |
+| ID            | 状态    | 环境/版本                                   | 证据                                                                                                                                                                                                                                                     |
+| ------------- | ------- | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `V0-T01`      | PASS    | Superset `8088`、frontend `9001`，18:07 CST | `curl /health=200`；浏览器 Dataset 编辑器可交互；Flask session `35214`                                                                                                                                                                                   |
+| `V0-T02`      | PASS    | Git `dev/6.1@4b2b732ecf`，2026-08-24        | `git rev-parse HEAD`；`git status --short --branch`，用户路径未纳入改动                                                                                                                                                                                  |
+| `V1-T01～T05` | PASS    | Jest，Node 22                               | DatasourceEditor 与 helper 正向、负向和关闭态兼容用例通过                                                                                                                                                                                                |
+| `V1-T06～T08` | PASS    | Jest + pytest，Node 22 / Python 3.11        | bootstrap、PopEditor hydration、事件日志白名单用例通过                                                                                                                                                                                                   |
+| `V1-T09`      | PASS    | Jest，`appRoot=''` 与 `/prefix`             | SupersetClient form action 契约通过                                                                                                                                                                                                                      |
+| `V1-T10`      | PASS    | 本机浏览器 + ClickHouse 21.3                | 按钮/文本链接均打开 clean `/sqllab`；dataset 提示、schema、查询和结果恢复；`Log.referrer` 为不含 SQL 的 Dataset list URL                                                                                                                                 |
+| `V1-LOG`      | PASS    | metadata `Log.id=3643`                      | request payload 仅含 path/accepted/长度/字节/哈希和框架 `object_ref`；SQL、form_data、Token 命中均为 0                                                                                                                                                   |
+| `V1-BASELINE` | PASS    | 唯一 `/private/tmp` SQLite + 标准 test init | 先确认旧 integration metadata 因缺 `can_read SQLLab`、`can_execute_sql_query SQLLab` 与 `can_post TabStateView` 得到 13 passed/12 skipped/5 failed；隔离执行 db upgrade → init → load-test-users 后为 18 passed/12 skipped/0 failed，未修改现有 metadata |
+| `V2-T01`      | PASS    | ClickHouse `21.3.20.1`                      | 8 张物理表 + 1 个 View、92,000 行；严格四列 26/26 gate PASS；第 26 项 12,000 行且七粒度 mismatch 全 0                                                                                                                                                    |
+| `V2-T02`      | PASS    | shadow + active Connect `0.15.1`            | 120 个 dialect/EngineSpec/seed 测试通过；真实 21.3 连接、七粒度、12,000 行和 View 10,000 行通过；主 venv `pip check`；18:58 CST 重开 Dashboard 2 后 Chart Data POST 200，Table 渲染 4 个 segment、各 250 行；SQL Lab execute 200 并显示 1K 行结果              |
+| `V2-T03`      | PASS    | shadow Connect `0.13.0`                     | 120 个测试、真实 21.3 连接、七粒度和 12,000 行通过；raw inspector 9/0，Superset EngineSpec 归一化为 8/1，View 10,000 行查询通过                                                                                                                          |
+| `V2-T04`      | PASS    | SQLGlot `28.10.0`                           | 双 ClickHouse key 使用自有 dialect；MySQL/PostgreSQL/YQL 与 stock ClickHouse 生成结果保持不变                                                                                                                                                            |
+| `V2-T05`      | PASS    | seed gate unit + 真实容器                   | 12 个 parser/validate-only 测试通过；25/27/FAIL/乱序 order/重复 order/重复 name/空 name/列数错误均拒绝；真实 validate-only 前后均为 9 个对象，UUID/mtime SHA-256 均为 `852e7e9cbbf9...`                                                                  |
+| `V2-T06`      | PASS    | active 0.15.1 + Flask/API/Browser           | tables API `200/count=9`、8 table+1 view、无重复；SQL Lab 用 function 图标展示 `drill_wide_flat` 并成功展开 52 列；5 处 metadata、`version_requirements` 与 pyproject 均锁定 `<1.0`                                                                      |
+| `V2-ENV`      | PASS    | active Connect `0.15.1`                     | 起始 freeze 285 包、SHA-256 `71513b5276ff...`; 清除失效代理并设置 localhost NO_PROXY 后 schema/function API 与 SQL Lab 正常；主 venv 保持 SQLAlchemy 1.4.54                                                                                              |
+| `V3-*`        | PENDING | —                                           | —                                                                                                                                                                                                                                                        |
+| `V4-*`        | PENDING | —                                           | —                                                                                                                                                                                                                                                        |
+| `V5-*`        | PENDING | —                                           | —                                                                                                                                                                                                                                                        |
+| `V6-*`        | PENDING | —                                           | —                                                                                                                                                                                                                                                        |
+| `V7-*`        | PENDING | —                                           | —                                                                                                                                                                                                                                                        |
+| `V8-*`        | PENDING | —                                           | —                                                                                                                                                                                                                                                        |
+| `V9-*`        | PENDING | —                                           | —                                                                                                                                                                                                                                                        |

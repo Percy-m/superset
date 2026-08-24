@@ -200,6 +200,61 @@ FROM
     toString(countIf(expected_anomaly = 1)),
     if(countIf(expected_anomaly = 1) > 0, 'PASS', 'FAIL')
   FROM superset_quality_21_3.fact_inventory
+  UNION ALL
+  SELECT
+    26,
+    'date_trunc_lowercase_equivalence',
+    concat(
+      'rows=', toString(count()),
+      ';minute_mismatch=', toString(countIf(
+        dateTrunc('minute', event_time) != toStartOfMinute(event_time)
+      )),
+      ';hour_mismatch=', toString(countIf(
+        dateTrunc('hour', event_time) != toStartOfHour(event_time)
+      )),
+      ';day_mismatch=', toString(countIf(
+        dateTrunc('day', event_time) != toStartOfDay(event_time)
+      )),
+      ';week_mismatch=', toString(countIf(
+        dateTrunc('week', event_time) != toMonday(event_time)
+      )),
+      ';month_mismatch=', toString(countIf(
+        dateTrunc('month', event_time) != toStartOfMonth(event_time)
+      )),
+      ';quarter_mismatch=', toString(countIf(
+        dateTrunc('quarter', event_time) != toStartOfQuarter(event_time)
+      )),
+      ';year_mismatch=', toString(countIf(
+        dateTrunc('year', event_time) != toStartOfYear(event_time)
+      ))
+    ),
+    if(
+      count() = 12000
+      AND countIf(
+        dateTrunc('minute', event_time) != toStartOfMinute(event_time)
+      ) = 0
+      AND countIf(
+        dateTrunc('hour', event_time) != toStartOfHour(event_time)
+      ) = 0
+      AND countIf(
+        dateTrunc('day', event_time) != toStartOfDay(event_time)
+      ) = 0
+      AND countIf(
+        dateTrunc('week', event_time) != toMonday(event_time)
+      ) = 0
+      AND countIf(
+        dateTrunc('month', event_time) != toStartOfMonth(event_time)
+      ) = 0
+      AND countIf(
+        dateTrunc('quarter', event_time) != toStartOfQuarter(event_time)
+      ) = 0
+      AND countIf(
+        dateTrunc('year', event_time) != toStartOfYear(event_time)
+      ) = 0,
+      'PASS',
+      'FAIL'
+    )
+  FROM superset_quality_21_3.fact_events
 )
 ORDER BY check_order
-FORMAT PrettyCompactMonoBlock;
+FORMAT TabSeparatedRaw;

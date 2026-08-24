@@ -15,11 +15,14 @@
 # specific language governing permissions and limitations
 # under the License.
 
+import re
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Optional
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 
 import pytest
+from packaging.requirements import Requirement
 from sqlalchemy.engine.url import make_url
 from sqlalchemy.types import (
     Boolean,
@@ -210,6 +213,104 @@ def test_connect_get_column_spec(
     )
 
     assert_column_spec(spec, native_type, sqla_type, attrs, generic_type, is_dttm)
+
+
+@pytest.mark.parametrize("schema", [None, "superset_quality_21_3"])
+def test_get_view_names_uses_clickhouse_system_metadata(schema: Optional[str]) -> None:
+    from superset.db_engine_specs.clickhouse import (
+        ClickHouseConnectEngineSpec,
+        ClickHouseEngineSpec,
+    )
+
+    for spec in (ClickHouseEngineSpec, ClickHouseConnectEngineSpec):
+        database = MagicMock()
+        inspector = MagicMock()
+        connection = database.get_raw_connection.return_value.__enter__.return_value
+        cursor = connection.cursor.return_value
+        cursor.fetchall.return_value = [("drill_wide_flat",)]
+
+        assert spec.get_view_names(database, inspector, schema) == {"drill_wide_flat"}
+
+        sql, params = cursor.execute.call_args.args
+        assert "SELECT name FROM system.tables" in sql
+        assert "engine = 'View'" in sql
+        if schema:
+            assert "database = %(schema)s" in sql
+            assert schema not in sql
+            assert params == {"schema": schema}
+        else:
+            assert "database = currentDatabase()" in sql
+            assert params == {}
+        database.get_raw_connection.assert_called_once_with(schema=schema)
+
+
+def test_get_view_names_propagates_database_errors() -> None:
+    from superset.db_engine_specs.clickhouse import ClickHouseConnectEngineSpec
+
+    database = MagicMock()
+    inspector = MagicMock()
+    connection = database.get_raw_connection.return_value.__enter__.return_value
+    connection.cursor.return_value.execute.side_effect = RuntimeError("metadata error")
+
+    with pytest.raises(RuntimeError, match="metadata error"):
+        ClickHouseConnectEngineSpec.get_view_names(database, inspector, "analytics")
+
+
+def test_get_view_names_maps_legacy_connection_errors() -> None:
+    from superset.db_engine_specs.clickhouse import ClickHouseEngineSpec
+    from superset.db_engine_specs.exceptions import SupersetDBAPIDatabaseError
+
+    database = MagicMock()
+    inspector = MagicMock()
+    connection = database.get_raw_connection.return_value.__enter__.return_value
+    connection.cursor.return_value.execute.side_effect = NewConnectionError(
+        HTTPConnection("localhost"), "sensitive metadata error"
+    )
+
+    with pytest.raises(SupersetDBAPIDatabaseError, match="Connection failed"):
+        ClickHouseEngineSpec.get_view_names(database, inspector, "analytics")
+
+
+def test_get_table_names_excludes_clickhouse_views() -> None:
+    from superset.db_engine_specs.clickhouse import (
+        ClickHouseConnectEngineSpec,
+        ClickHouseEngineSpec,
+    )
+
+    for spec in (ClickHouseEngineSpec, ClickHouseConnectEngineSpec):
+        database = MagicMock()
+        inspector = MagicMock()
+        inspector.get_table_names.return_value = ["fact_sales", "drill_wide_flat"]
+        connection = database.get_raw_connection.return_value.__enter__.return_value
+        connection.cursor.return_value.fetchall.return_value = [("drill_wide_flat",)]
+
+        assert spec.get_table_names(database, inspector, "superset_quality_21_3") == {
+            "fact_sales"
+        }
+
+
+def test_connect_metadata_matches_supported_driver_range() -> None:
+    from superset.db_engine_specs.clickhouse import ClickHouseConnectEngineSpec
+
+    package = "clickhouse-connect>=0.13.0,<1.0"
+    metadata = ClickHouseConnectEngineSpec.metadata
+    pyproject_path = Path(__file__).resolve().parents[3] / "pyproject.toml"
+    pyproject = pyproject_path.read_text(encoding="utf-8")
+    declared_match = re.search(
+        r'^clickhouse\s*=\s*\["([^"]+)"\]\s*$', pyproject, re.MULTILINE
+    )
+
+    assert declared_match is not None
+    declared_package = declared_match.group(1)
+    assert Requirement(package) == Requirement(declared_package)
+    assert metadata["pypi_packages"] == [package]
+    assert metadata["version_requirements"] == package
+    assert metadata["drivers"][0]["pypi_package"] == package
+    assert package in metadata["install_instructions"]
+    assert all(
+        compatible["pypi_packages"] == [package]
+        for compatible in metadata["compatible_databases"]
+    )
 
 
 @pytest.mark.parametrize(
