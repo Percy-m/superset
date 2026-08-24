@@ -19,15 +19,18 @@ under the License.
 
 # Superset 数据质量 BI 增强详细设计
 
-| 属性     | 值                                                                               |
-| -------- | -------------------------------------------------------------------------------- |
-| 文档版本 | V1.0                                                                             |
-| 文档状态 | Proposed                                                                         |
-| 日期     | 2026-08-14                                                                       |
-| 输入需求 | 《Superset 6.0 数据质量 BI 增强需求分析与设计文档》V1.4                          |
-| 需求来源 | [共享聊天交付件](https://chatgpt.com/share/6a7ec819-69f4-83ec-ad1e-83377e0b86dd) |
-| 实现基线 | `dev/6.1`，`c83fb2bb1dcf`（Superset 6.1.0 RC3）                                  |
-| 目标读者 | 负责该 Superset 分支实现、评审、测试与发布的工程师                               |
+| 属性          | 值                                                                                                          |
+| ------------- | ----------------------------------------------------------------------------------------------------------- |
+| 文档版本      | V1.2                                                                                                        |
+| 文档状态      | Implemented（验收持续补充）                                                                                 |
+| 日期          | 2026-08-24                                                                                                  |
+| 输入需求      | 《Superset 6.0 数据质量 BI 增强需求分析与设计文档》V1.4                                                     |
+| 需求来源      | [共享聊天交付件](https://chatgpt.com/share/6a7ec819-69f4-83ec-ad1e-83377e0b86dd)                            |
+| 原始设计基线  | `dev/6.1`，`c83fb2bb1dcf`（Superset 6.1.0 RC3）                                                             |
+| 增量审计基线  | `dev/6.1`，`5f4c1760262a`                                                                                   |
+| As-built 基线 | `dev/6.1`，`c18ed1fd02`                                                                                     |
+| 补充设计      | [ClickHouse 21.3 兼容与 Drill Detail 表格对齐](./superset-clickhouse-21-3-drill-detail-alignment-design.md) |
+| 目标读者      | 负责该 Superset 分支实现、评审、测试与发布的工程师                                                          |
 
 ## 1. 摘要
 
@@ -46,6 +49,10 @@ Superset 6.1 代码为事实基线。V1.4 以 Superset 6.0 为基线，因此本
 Sparkline 与多级下钻不在范围内。本文不要求数据库迁移；新增配置均保存在
 Slice `form_data`、Chart Data 请求或 Dashboard Permalink 状态中。所有新能力
 由默认关闭的 Feature Flag 控制。
+
+FR-01～FR-05 提交后的 ClickHouse 21.3 时间粒度兼容和 Drill Detail 虚拟表格对齐
+问题，使用增量 ID `CH-13`、`UI-DTD-01` 单独归档在[补充设计](./superset-clickhouse-21-3-drill-detail-alignment-design.md)，
+不改变本文件的五项 FR 范围或 AC-01～AC-17 含义。
 
 ## 2. 范围、术语与约束
 
@@ -380,8 +387,32 @@ interface AlertRuleExtension {
 
 ### 6.2 Header 状态和 QueryObject
 
-Table Header 按 subject 展示 RED、YELLOW、GREEN 多选项。没有对应可筛选规则的等级
-disabled。选择结果保存为：
+Table Header 按 subject 展示三个图标式多选项，不直接显示内部枚举文字。没有对应可筛选
+规则的等级 disabled。图标、形状和主题色固定映射如下：
+
+> As-built FR-02 提交 `a8b507c29a` 仍把 `RED/YELLOW/GREEN` 作为菜单可见文字；本节是
+> V1.2 批准的前端展示 follow-up，尚未包含在 `c18ed1fd02`，不得标记为已实现。
+
+| 内部等级 | 可见图标                    | 主题色               | Tooltip / 可访问语义 |
+| -------- | --------------------------- | -------------------- | -------------------- |
+| `RED`    | `Icons.StopOutlined`        | `theme.colorError`   | 严重告警             |
+| `YELLOW` | `Icons.WarningOutlined`     | `theme.colorWarning` | 警告告警             |
+| `GREEN`  | `Icons.CheckCircleOutlined` | `theme.colorSuccess` | 正常状态             |
+
+- 只能使用 `@superset-ui/core/components` 的 `Dropdown`、`Tooltip`、`Button` 和 `Icons`；
+  不直接导入 Ant Design，也不新增自定义 SVG。
+- 三个等级使用不同形状，禁止只显示三个彩色圆点，避免颜色成为唯一信息。
+- 菜单项保持 AntD multiple menu 的 `menuitemcheckbox`、选中勾和键盘行为；图标设为
+  `aria-hidden`，本地化隐藏文本提供可访问名称，Tooltip 支持 hover 和 focus。
+- disabled 项使用 `theme.colorTextDisabled`；选中状态同时由菜单勾选和
+  `aria-checked` 表达，不只改变颜色。
+- Header 触发器继续使用 `Icons.FilterOutlined`；无选择时为 link 样式，有选择时为
+  primary 样式，并保持“按该列告警等级筛选”的本地化 `aria-label`。
+- Explore 条件格式编辑器保留 Red/Yellow/Green 的本地化文字选项，避免规则作者只凭
+  颜色理解配置；图标化只作用于 Table Header 运行时筛选菜单。
+
+图标化只改变展示层。内部 `AlertLevel`、DataMask、QueryObject、Permalink、缓存键和
+服务端可信校验继续使用稳定枚举。选择结果保存为：
 
 ```json
 {
@@ -847,10 +878,20 @@ SQL、数据库错误原文、过滤值或数据样本。
 
 ## 12. 实施分解
 
-实施严格按照 FR-01、FR-02、FR-03、FR-04、FR-05 顺序推进。当前 FR 未完成编码、
-自动化测试和验收门禁前，不得开始下一个 FR，也不得提前实现后续 FR 才会使用的公共
-组件、Feature Flag、接口桩或空模块。完整步骤和门禁见
+实施已按照 FR-01、FR-02、FR-03、FR-04、FR-05 顺序完成。实施期间遵守“当前 FR 未
+完成前不得提前实现后续公共组件、Feature Flag、接口桩或空模块”的约束。完整步骤和
+门禁见
 [数据质量 BI 增强实施计划](./superset-data-quality-bi-implementation-plan.md)。
+
+| 范围             | As-built 提交 |
+| ---------------- | ------------- |
+| FR-01            | `de65297208`  |
+| FR-02            | `a8b507c29a`  |
+| FR-03            | `f02a5937b4`  |
+| FR-04            | `8e7dcabcd7`  |
+| FR-05            | `5f4c176026`  |
+| FR-01 分页可见性 | `dee7616f21`  |
+| CH-13、UI-DTD-01 | `c18ed1fd02`  |
 
 ### 阶段 1：FR-01
 
@@ -903,7 +944,10 @@ SQL、数据库错误原文、过滤值或数据样本。
 
 ### 13.2 FR-02
 
-- Jest/RTL：ruleId 生成/保留/复制、可筛选条件校验、Header 可用等级和 ownState。
+- Jest/RTL：ruleId 生成/保留/复制、可筛选条件校验、Header 等级多选、disabled/选中/键盘
+  状态和 ownState。
+- `[未实现 Follow-up]` Jest/RTL：Header 图标、Tooltip、可访问名称和主题色；界面不暴露
+  原始大写枚举文字，并保留 `menuitemcheckbox`、选中勾与键盘行为。
 - Unit：同 subject OR、不同 subject AND、物理列 WHERE、保存指标 HAVING。
 - Unit：伪造 UUID、level 不匹配、旧规则、adhoc metric、Cell Bar 和非法 operator。
 - Query tests：data、rowcount、totals、server pagination 和 download 使用相同过滤关系。
@@ -1004,8 +1048,9 @@ SQL、数据库错误原文、过滤值或数据样本。
 - 没有数据库迁移；所有旧对象通过缺省值和可选字段兼容。
 - 告警筛选激活时 totals 的定义固定为“过滤后分组数值之和”。
 - Dashboard Tab 导出是同步、串行、最多 10 个经典 Table 的全有或全无操作。
-- 本地 Superset 服务在设计阶段未运行；现状结论来自静态代码与基线提交核验，本文列出
-  的运行时测试必须在功能实现阶段执行。
+- 本地 Superset 服务在设计阶段未运行；实施阶段已恢复后端 `localhost:8088` 和前端
+  `localhost:9001`。运行时结论只以各 FR 和补充设计记录的实际证据为准，不用服务已
+  启动代替未执行的跨平台或权限测试。
 
 ## 17. ClickHouse 21.3 适配需求
 
@@ -1022,7 +1067,7 @@ SQL、数据库错误原文、过滤值或数据样本。
 | 数据规模                | 8 张物理表、1 个视图、92,000 行                                        |
 | Superset SQLAlchemy URI | `clickhousedb+connect://default:@127.0.0.1:8123/superset_quality_21_3` |
 | 本机 Python 驱动        | `clickhouse-connect 1.3.0`，连接与查询验证通过                         |
-| Superset 服务           | `localhost:8088` 未启动，端到端 UI 测试待应用启动后执行                |
+| Superset 服务           | 后端 `localhost:8088`、前端 `localhost:9001` 已启动并完成本机增量验收  |
 
 本地 Python 驱动版本高于仓库 `pyproject.toml` 声明的
 `clickhouse-connect>=0.13.0,<1.0` 范围，因此“本机连接成功”不能代替依赖范围内的 CI
@@ -1171,20 +1216,25 @@ REST 和权限用例标记 Environment Blocked，不得伪报通过。
 
 ### 18.3 FR-02 测试用例
 
-| ID         | 数据/前置                         | 步骤                                  | 预期结果                                                           |
-| ---------- | --------------------------------- | ------------------------------------- | ------------------------------------------------------------------ |
-| TC-FR02-01 | 新建 revenue 三档规则             | 保存、重排、编辑、复制规则            | 原规则 UUID 稳定；复制项生成新 UUID；扩展字段可回读                |
-| TC-FR02-02 | 旧条件格式规则                    | 开启告警筛选 UI                       | 旧规则继续着色，但没有可选告警等级                                 |
-| TC-FR02-03 | Revenue RED/YELLOW                | 同时选择两档                          | 同 subject 使用 OR；结果等于 ClickHouse `revenue < 100` 的分组语义 |
-| TC-FR02-04 | Revenue RED + margin RED          | 同时选择两个 subject                  | subject 间 AND；结果同时满足两个谓词                               |
-| TC-FR02-05 | region 物理维度、revenue 保存指标 | 分别启用规则并查看生成查询            | region 谓词在 WHERE；revenue 谓词在 HAVING                         |
-| TC-FR02-06 | 伪造/删除/level 不匹配 ruleId     | 调用 Chart Data API                   | 400 `TABLE_ALERT_RULE_INVALID`，不执行 SQL                         |
-| TC-FR02-07 | RED 过滤                          | 请求 data、rowcount、totals、download | 四者来自同一 Qualified Relation；totals 等于过滤后分组之和         |
-| TC-FR02-08 | 两个顺序不同的等价引用            | 比较 cache key 和结果                 | cache key 相同；规则阈值修改后 cache key 改变                      |
-| TC-FR02-09 | CELL_BAR + RED background         | 点击 RED                              | 数据按 RED 规则筛选；Cell Bar 不参与 filter predicate              |
-| TC-FR02-10 | Decimal 边界 -100、50、100、500   | 比较屏幕色、筛选和导出样式            | 边界包含关系一致，无 Float 精度漂移                                |
-| TC-FR02-11 | 重叠背景/文字/整行规则            | 导出并读取 workbook styles            | 每个样式维度最后一个命中规则生效，与前端 fixture 一致              |
-| TC-FR02-12 | APAC RLS + GREEN 告警             | 查询/导出                             | RLS 先约束事实集合，告警在授权结果上求值，不能越权                 |
+| ID         | 数据/前置                         | 步骤                                  | 预期结果                                                   |
+| ---------- | --------------------------------- | ------------------------------------- | ---------------------------------------------------------- |
+| TC-FR02-01 | 新建 revenue 三档规则             | 保存、重排、编辑、复制规则            | 原规则 UUID 稳定；复制项生成新 UUID；扩展字段可回读        |
+| TC-FR02-02 | 旧条件格式规则                    | 开启告警筛选 UI                       | 旧规则继续着色，但 Header 不出现告警筛选入口               |
+| TC-FR02-03 | Revenue RED/YELLOW                | 同时选择两个等级                      | 同 subject 使用 OR                                         |
+| TC-FR02-04 | Revenue RED + margin RED          | 同时选择两个 subject                  | subject 间 AND；结果同时满足两个谓词                       |
+| TC-FR02-05 | region 物理维度、revenue 保存指标 | 分别启用规则并查看生成查询            | region 谓词在 WHERE；revenue 谓词在 HAVING                 |
+| TC-FR02-06 | 伪造/删除/level 不匹配 ruleId     | 调用 Chart Data API                   | 400 `TABLE_ALERT_RULE_INVALID`，不执行 SQL                 |
+| TC-FR02-07 | RED 过滤                          | 请求 data、rowcount、totals、download | 四者来自同一 Qualified Relation；totals 等于过滤后分组之和 |
+| TC-FR02-08 | 两个顺序不同的等价引用            | 比较 cache key 和结果                 | cache key 相同；规则阈值修改后 cache key 改变              |
+| TC-FR02-09 | CELL_BAR + RED background         | 键盘选择 RED 等级                     | 选中状态正确；Cell Bar 不参与 filter predicate             |
+| TC-FR02-10 | Decimal 边界 -100、50、100、500   | 比较屏幕色、筛选和导出样式            | 边界包含关系一致，无 Float 精度漂移                        |
+| TC-FR02-11 | 重叠背景/文字/整行规则            | 导出并读取 workbook styles            | 每个样式维度最后一个命中规则生效，与前端 fixture 一致      |
+| TC-FR02-12 | APAC RLS + GREEN 告警             | 查询/导出                             | RLS 先约束事实集合，告警在授权结果上求值，不能越权         |
+
+`FR2-UI-FOLLOWUP-01（未实现）`：把 Header 的 `RED/YELLOW/GREEN` 可见文字替换为
+`StopOutlined`、`WarningOutlined`、`CheckCircleOutlined`，验证主题色、Tooltip、本地化隐藏
+文本、`menuitemcheckbox`、`aria-checked`、disabled、选中勾和键盘操作；此项不计入上述
+12 个 As-built FR-02 用例，也不改变 61 个详细用例的统计口径。
 
 ### 18.4 FR-03 测试用例
 

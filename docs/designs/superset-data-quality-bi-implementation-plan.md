@@ -19,17 +19,20 @@ under the License.
 
 # Superset 数据质量 BI 增强实施计划
 
-| 属性         | 值                                                                             |
-| ------------ | ------------------------------------------------------------------------------ |
-| 文档版本     | V1.0                                                                           |
-| 文档状态     | Proposed                                                                       |
-| 日期         | 2026-08-17                                                                     |
-| 需求输入     | 数据质量 BI 增强需求 V1.4                                                      |
-| 详细设计     | [数据质量 BI 增强详细设计](./superset-data-quality-bi-detailed-design.md) V1.0 |
-| 实现基线     | `dev/6.1`，`c83fb2bb1dcf`（Superset 6.1.0 RC3）                                |
-| 数据库基线   | ClickHouse `21.3.20.1`                                                         |
-| 文档目标     | 规定 FR-01～FR-05 的严格实施顺序、代码内容和逐项验收门禁                       |
-| 功能代码状态 | 尚未开始；本文只定义后续实施计划                                               |
+| 属性          | 值                                                                                                          |
+| ------------- | ----------------------------------------------------------------------------------------------------------- |
+| 文档版本      | V1.2                                                                                                        |
+| 文档状态      | Implemented（验收持续补充）                                                                                 |
+| 日期          | 2026-08-24                                                                                                  |
+| 需求输入      | 数据质量 BI 增强需求 V1.4                                                                                   |
+| 详细设计      | [数据质量 BI 增强详细设计](./superset-data-quality-bi-detailed-design.md) V1.2                              |
+| 补充设计      | [ClickHouse 21.3 兼容与 Drill Detail 表格对齐](./superset-clickhouse-21-3-drill-detail-alignment-design.md) |
+| 原始实现基线  | `dev/6.1`，`c83fb2bb1dcf`（Superset 6.1.0 RC3）                                                             |
+| 增量审计基线  | `dev/6.1`，`5f4c1760262a`                                                                                   |
+| As-built 基线 | `dev/6.1`，`c18ed1fd02`                                                                                     |
+| 数据库基线    | ClickHouse `21.3.20.1`                                                                                      |
+| 文档目标      | 规定 FR-01～FR-05 的严格实施顺序、代码内容和逐项验收门禁                                                    |
+| 功能代码状态  | FR-01～FR-05 已提交；CH-13/UI-DTD-01 已合并提交 `c18ed1fd02`；Header 图标化仅完成设计                       |
 
 ## 1. 计划结论
 
@@ -85,8 +88,9 @@ flowchart LR
 6. 当前 FR 的变更已完成代码评审，且没有遗留阻塞缺陷；
 7. 目标文件 pre-commit 和 `git diff --check` 通过。
 
-Superset 应用未启动时，可以完成纯函数单元测试和静态检查，但 API、UI 或 E2E 门禁
-不能被标记为通过，也不能因此进入下一个 FR。
+Superset 应用未启动时，只能完成纯函数单元测试和静态检查，API、UI 或 E2E 门禁不能
+被标记为通过。As-built 阶段已恢复 `localhost:8088` 和前端 `localhost:9001`，并完成
+本机 Drill Detail 增量验收；未执行的跨平台场景仍需单独标记。
 
 ### 2.2 每个 FR 的提交边界
 
@@ -128,7 +132,9 @@ Superset 应用未启动时，可以完成纯函数单元测试和静态检查�
 - 本机测试库：8 张物理表、1 个视图、92,000 行；
 - 完整测试设计：详细设计第 18 章中的 61 个测试用例。
 
-本机 Superset `localhost:8088` 未启动。开始 FR-01 的 API/UI 验收前必须先恢复应用环境。
+设计阶段本机 Superset 尚未启动；实施阶段已恢复 `localhost:8088` 与前端
+`localhost:9001`。该事实不自动代表所有 API/UI/E2E 用例均已执行，具体证据仍按每项
+完成记录判断。
 
 ### 3.2 每个 FR 开始前的固定检查
 
@@ -370,26 +376,43 @@ interface AlertRuleExtension {
 }
 ```
 
+Table Header 运行时筛选菜单使用图标而不是直接显示 `RED/YELLOW/GREEN`：
+
+> 这是 V1.2 前端 follow-up。FR-02 As-built 仍显示原始枚举文字，本次文档归档不修改
+> `TableChart.tsx`，也不宣称图标菜单已经上线。
+
+| 内部等级 | 图标                        | 主题色               | 可访问名称 |
+| -------- | --------------------------- | -------------------- | ---------- |
+| `RED`    | `Icons.StopOutlined`        | `theme.colorError`   | 严重告警   |
+| `YELLOW` | `Icons.WarningOutlined`     | `theme.colorWarning` | 警告告警   |
+| `GREEN`  | `Icons.CheckCircleOutlined` | `theme.colorSuccess` | 正常状态   |
+
+图标必须来自 `@superset-ui/core/components`，并保留 Tooltip、本地化隐藏文本、
+`menuitemcheckbox`、选中勾、`aria-checked`、disabled 和键盘操作。三种形状必须不同，
+不能只用颜色区分。Explore 条件格式编辑器继续显示本地化文字；DataMask、QueryObject、
+Permalink 和服务端协议仍使用原枚举，不因图标化发生变化。
+
 ### 5.3 代码范围
 
-| 层次        | 主要文件或新增模块                                                      | 实现内容                                |
-| ----------- | ----------------------------------------------------------------------- | --------------------------------------- |
-| 公共类型    | `packages/superset-ui-chart-controls/src/types.ts`                      | 稳定规则 ID、subject、level、filterable |
-| 控件类型    | `src/explore/components/controls/ConditionalFormattingControl/types.ts` | 编辑器类型同步                          |
-| 条件格式 UI | `ConditionalFormattingControl` 相关 TSX                                 | 创建 UUID、过滤资格校验、复制生成新 ID  |
-| Table UI    | `plugins/plugin-chart-table/src/TableChart.tsx`                         | Header 等级多选和 ownState 更新         |
-| Query 构造  | `plugins/plugin-chart-table/src/buildQuery.ts`                          | data、rowcount、totals、download 传引用 |
-| Schema      | `superset/charts/schemas.py`                                            | 严格嵌套 `alert_filters`                |
-| 规则服务    | 新增 `superset/common/table_alerts.py`                                  | 保存 Slice 规则验证、谓词、指纹         |
-| 查询关系    | QueryObject/SQLA 查询构建相关模块                                       | WHERE、HAVING、Qualified Relation       |
-| 后端测试    | `tests/unit_tests/common/`、Chart Data 集成测试                         | 伪造规则、SQL 位置、缓存和一致性        |
-| 前端测试    | Table、buildQuery、条件格式控件测试                                     | 规则生命周期、Header、布尔组合          |
+| 层次                   | 主要文件或新增模块                                                      | 实现内容                                |
+| ---------------------- | ----------------------------------------------------------------------- | --------------------------------------- |
+| 公共类型               | `packages/superset-ui-chart-controls/src/types.ts`                      | 稳定规则 ID、subject、level、filterable |
+| 控件类型               | `src/explore/components/controls/ConditionalFormattingControl/types.ts` | 编辑器类型同步                          |
+| 条件格式 UI            | `ConditionalFormattingControl` 相关 TSX                                 | 创建 UUID、过滤资格校验、复制生成新 ID  |
+| Table UI               | `plugins/plugin-chart-table/src/TableChart.tsx`                         | Header 等级多选和 ownState 更新         |
+| UI Follow-up（未实现） | `plugins/plugin-chart-table/src/TableChart.tsx`                         | 图标、Tooltip、a11y 和主题色展示        |
+| Query 构造             | `plugins/plugin-chart-table/src/buildQuery.ts`                          | data、rowcount、totals、download 传引用 |
+| Schema                 | `superset/charts/schemas.py`                                            | 严格嵌套 `alert_filters`                |
+| 规则服务               | 新增 `superset/common/table_alerts.py`                                  | 保存 Slice 规则验证、谓词、指纹         |
+| 查询关系               | QueryObject/SQLA 查询构建相关模块                                       | WHERE、HAVING、Qualified Relation       |
+| 后端测试               | `tests/unit_tests/common/`、Chart Data 集成测试                         | 伪造规则、SQL 位置、缓存和一致性        |
+| 前端测试               | Table、buildQuery、条件格式控件测试                                     | 规则生命周期、Header、布尔组合          |
 
 ### 5.4 可信边界和查询设计
 
 ```mermaid
 flowchart TD
-  UI["Header 选择 RED/YELLOW/GREEN"] --> DM["dataMask ownState.alertFilters"]
+  UI["Header 选择告警等级"] --> DM["dataMask ownState.alertFilters"]
   DM --> BQ["buildQuery 只发送 rule_id + level"]
   BQ --> SC["ChartDataQueryObjectSchema"]
   SC --> LOAD["按 form_data.slice_id 加载保存 Slice"]
@@ -444,24 +467,27 @@ flowchart LR
 
 ### 5.6 实施步骤
 
-| 步骤   | 实现内容                                                  | 完成证据                          |
-| ------ | --------------------------------------------------------- | --------------------------------- |
-| FR2-01 | 只加入 FR-02 Flag 和关闭态回归                            | Flag 关闭不发送 `alert_filters`   |
-| FR2-02 | 扩展条件格式 TypeScript 类型和编辑器                      | 新规则 UUID 稳定，复制生成新 UUID |
-| FR2-03 | 实现可筛选资格校验和旧规则兼容                            | 不支持规则不能选为 filterable     |
-| FR2-04 | 实现 Table Header 等级多选和 ownState                     | 同列多选状态稳定，Cell Bar 不参与 |
-| FR2-05 | 扩展 buildQuery 和 Marshmallow schema                     | 只发送最多 50 个唯一引用          |
-| FR2-06 | 创建 FR-02 范围的 `TableRuleResolver`                     | 伪造、过期、level 不符均返回 400  |
-| FR2-07 | 编译同 subject OR、跨 subject AND 和 WHERE/HAVING         | 与直接 ClickHouse SQL 结果一致    |
-| FR2-08 | 构建 Qualified Relation 并统一 data/count/totals/download | 四类结果集合语义一致              |
-| FR2-09 | 将规则指纹和标准谓词加入缓存键                            | 阈值更新不复用旧缓存              |
-| FR2-10 | 完成样式优先级、NULL、Decimal 和重叠规则前端回归          | 屏幕样式不因筛选实现而退化        |
-| FR2-11 | 完成权限、RLS、ClickHouse 21.3 和组合测试                 | FR-02 门禁签字后才允许开始 FR-03  |
+| 步骤               | 实现内容                                                  | 完成证据                                      |
+| ------------------ | --------------------------------------------------------- | --------------------------------------------- |
+| FR2-01             | 只加入 FR-02 Flag 和关闭态回归                            | Flag 关闭不发送 `alert_filters`               |
+| FR2-02             | 扩展条件格式 TypeScript 类型和编辑器                      | 新规则 UUID 稳定，复制生成新 UUID             |
+| FR2-03             | 实现可筛选资格校验和旧规则兼容                            | 不支持规则不能选为 filterable                 |
+| FR2-04             | 实现 Table Header 等级多选和 ownState                     | 同列多选稳定，Cell Bar 不参与                 |
+| FR2-05             | 扩展 buildQuery 和 Marshmallow schema                     | 只发送最多 50 个唯一引用                      |
+| FR2-06             | 创建 FR-02 范围的 `TableRuleResolver`                     | 伪造、过期、level 不符均返回 400              |
+| FR2-07             | 编译同 subject OR、跨 subject AND 和 WHERE/HAVING         | 与直接 ClickHouse SQL 结果一致                |
+| FR2-08             | 构建 Qualified Relation 并统一 data/count/totals/download | 四类结果集合语义一致                          |
+| FR2-09             | 将规则指纹和标准谓词加入缓存键                            | 阈值更新不复用旧缓存                          |
+| FR2-10             | 完成样式优先级、NULL、Decimal 和重叠规则前端回归          | 屏幕样式不因筛选实现而退化                    |
+| FR2-11             | 完成权限、RLS、ClickHouse 21.3 和组合测试                 | FR-02 门禁签字后才允许开始 FR-03              |
+| FR2-UI-FOLLOWUP-01 | `[未实现]` 将等级文字替换为图标并补齐 a11y                | 不显示原始枚举；Tooltip、主题色和键盘行为通过 |
 
 ### 5.7 测试和完成定义
 
-必须覆盖详细设计中的 FR2-T01～FR2-T12：同列 OR、跨列 AND、WHERE/HAVING、伪造规则、
-旧规则、缓存键、分页/计数/totals/download 一致性和 Cell Bar 独立性。
+As-built 必须覆盖详细设计中的 TC-FR02-01～TC-FR02-12：Header 等级多选与 disabled/键盘状态、
+同列 OR、跨列 AND、WHERE/HAVING、伪造规则、旧规则、缓存键、分页/计数/totals/download
+一致性和 Cell Bar 独立性。`FR2-UI-FOLLOWUP-01` 尚未实现，另行覆盖图标、Tooltip、
+可访问名称、主题色、选中勾和不显示原始枚举文字。
 
 ClickHouse 使用 `fact_sales` 的 RED 207、YELLOW 5,937、GREEN 13,856 基线，并额外覆盖
 Decimal scale、Nullable 和 UInt64。FR-02 完成前不得实现任何 styled XLSX 写入代码。
@@ -969,7 +995,10 @@ fixture，不得继续 UI/API 测试。
 实现时如果实际调用链要求增加文件，必须在当前 FR 的变更说明中记录理由；不得借机修改后续 FR
 目录或进行无关重构。
 
-## 13. 最终交付检查清单
+## 13. 原始实施门禁模板
+
+以下清单保留原计划的逐 FR 门禁结构，不表示 As-built 功能尚未实现。实际提交、已执行
+验证和待补门禁分别以本文元数据、详细设计追踪矩阵及补充设计第 7 节为准。
 
 ### FR-01 完成后
 
