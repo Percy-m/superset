@@ -45,7 +45,7 @@ from sqlglot.optimizer.scope import (
 )
 
 from superset.exceptions import QueryClauseValidationException, SupersetParseError
-from superset.sql.dialects import DB2, Dremio, Firebolt, Pinot
+from superset.sql.dialects import DB2, Dremio, Firebolt, Pinot, SupersetClickHouse
 
 if TYPE_CHECKING:
     from superset.models.core import Database
@@ -61,8 +61,8 @@ SQLGLOT_DIALECTS = {
     "awsathena": Dialects.ATHENA,
     "bigquery": Dialects.BIGQUERY,
     "datastore": Dialects.BIGQUERY,
-    "clickhouse": Dialects.CLICKHOUSE,
-    "clickhousedb": Dialects.CLICKHOUSE,
+    "clickhouse": SupersetClickHouse,
+    "clickhousedb": SupersetClickHouse,
     "cockroachdb": Dialects.POSTGRES,
     "couchbase": Dialects.MYSQL,
     # "crate": ???

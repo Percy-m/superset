@@ -24,7 +24,18 @@ import {
 } from 'antd/es/table';
 import classNames from 'classnames';
 import { useResizeDetector } from 'react-resize-detector';
-import { useEffect, useRef, useState, useCallback, CSSProperties } from 'react';
+import {
+  CSSProperties,
+  createContext,
+  forwardRef,
+  HTMLAttributes,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useCallback,
+} from 'react';
 import { VariableSizeGrid as Grid } from 'react-window';
 import { safeHtmlSpan } from '@superset-ui/core';
 import { useTheme, styled } from '@apache-superset/core/theme';
@@ -38,19 +49,129 @@ export interface VirtualTableProps<
   allowHTML?: boolean;
 }
 
-const StyledCell = styled('div')<{ height?: number }>(
-  ({ theme, height }) => `
+type VirtualColumns<RecordType> = NonNullable<
+  AntTableProps<RecordType>['columns']
+>;
+
+export interface VirtualColumnLayout<RecordType> {
+  columns: VirtualColumns<RecordType>;
+  contentWidth: number;
+  estimatedColumnWidth: number;
+}
+
+const DEFAULT_MIN_COLUMN_WIDTH = 50;
+
+const isFiniteNumber = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isFinite(value);
+
+/**
+ * Resolve one immutable column layout shared by the AntD header and virtual body.
+ */
+export function resolveVirtualColumnLayout<RecordType extends object>(
+  columns: VirtualColumns<RecordType> | undefined,
+  containerWidth: number,
+  defaultColumnWidth: number,
+  minimumColumnWidth = DEFAULT_MIN_COLUMN_WIDTH,
+): VirtualColumnLayout<RecordType> {
+  if (!columns?.length) {
+    return {
+      columns: [],
+      contentWidth: 0,
+      estimatedColumnWidth: 0,
+    };
+  }
+
+  const minWidth =
+    isFiniteNumber(minimumColumnWidth) && minimumColumnWidth > 0
+      ? minimumColumnWidth
+      : DEFAULT_MIN_COLUMN_WIDTH;
+  const fallbackWidth =
+    isFiniteNumber(defaultColumnWidth) && defaultColumnWidth > 0
+      ? Math.max(defaultColumnWidth, minWidth)
+      : minWidth;
+  const availableContainerWidth =
+    isFiniteNumber(containerWidth) && containerWidth > 0 ? containerWidth : 0;
+  const explicitWidths = columns.map(({ width }) =>
+    isFiniteNumber(width) ? Math.max(width, minWidth) : undefined,
+  );
+  const fixedWidth = explicitWidths.reduce<number>(
+    (total, width) => total + (width ?? 0),
+    0,
+  );
+  const missingWidthCount = explicitWidths.filter(
+    width => width === undefined,
+  ).length;
+  const distributedWidth =
+    missingWidthCount > 0 && availableContainerWidth > 0
+      ? Math.max(
+          Math.floor(
+            (availableContainerWidth - fixedWidth) / missingWidthCount,
+          ),
+          minWidth,
+        )
+      : fallbackWidth;
+
+  const resolvedColumns = columns.map((column, index) => ({
+    ...column,
+    width: explicitWidths[index] ?? distributedWidth,
+  })) as VirtualColumns<RecordType>;
+  let contentWidth = resolvedColumns.reduce(
+    (total, { width }) => total + (width as number),
+    0,
+  );
+
+  if (contentWidth < availableContainerWidth) {
+    const lastColumnIndex = resolvedColumns.length - 1;
+    const lastColumn = resolvedColumns[lastColumnIndex];
+    resolvedColumns[lastColumnIndex] = {
+      ...lastColumn,
+      width:
+        (lastColumn.width as number) + (availableContainerWidth - contentWidth),
+    };
+    contentWidth = availableContainerWidth;
+  }
+
+  return {
+    columns: resolvedColumns,
+    contentWidth,
+    estimatedColumnWidth: contentWidth / resolvedColumns.length,
+  };
+}
+
+const StyledCell = styled('div')(
+  ({ theme }) => `
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  padding-left: ${theme.sizeUnit * 2}px;
-  padding-right: ${theme.sizeUnit}px;
+  padding-inline: ${theme.paddingXS}px;
   border-bottom: 1px solid ${theme.colorSplit};
   transition: background 0.3s;
-  line-height: ${height}px;
+  line-height: ${theme.lineHeight};
   box-sizing: border-box;
 `,
 );
+
+const VirtualGridContentWidthContext = createContext(0);
+
+const VirtualGridInner = forwardRef<
+  HTMLDivElement,
+  HTMLAttributes<HTMLDivElement>
+>(({ style, ...rest }, innerRef) => {
+  const contentWidth = useContext(VirtualGridContentWidthContext);
+
+  return (
+    <div
+      {...rest}
+      ref={innerRef}
+      style={{
+        ...style,
+        width: contentWidth,
+      }}
+    />
+  );
+});
+
+VirtualGridInner.displayName = 'VirtualGridInner';
 
 const StyledTable = styled(AntTable)(
   ({ theme }) => `
@@ -92,39 +213,17 @@ const VirtualTable = <RecordType extends object>(
 
   // If a column definition has no width, react-window will use this as the default column width
   const DEFAULT_COL_WIDTH = theme?.sizeUnit * 37 || 150;
-  const widthColumnCount = columns!.filter(({ width }) => !width).length;
-  let staticColWidthTotal = 0;
-  columns?.forEach(column => {
-    if (column.width) {
-      staticColWidthTotal += column.width as number;
-    }
-  });
-
-  let totalWidth = 0;
-  const defaultWidth = Math.max(
-    Math.floor((tableWidth - staticColWidthTotal) / widthColumnCount),
-    50,
+  const {
+    columns: mergedColumns,
+    contentWidth,
+    estimatedColumnWidth,
+  } = useMemo(
+    () => resolveVirtualColumnLayout(columns, tableWidth, DEFAULT_COL_WIDTH),
+    [columns, tableWidth, DEFAULT_COL_WIDTH],
   );
-
-  const mergedColumns =
-    columns?.map?.(column => {
-      const modifiedColumn = { ...column };
-      if (!column.width) {
-        modifiedColumn.width = defaultWidth;
-      }
-      totalWidth += modifiedColumn.width as number;
-      return modifiedColumn;
-    }) ?? [];
-
-  /*
-   * There are cases where a user could set the width of each column and the total width is less than width of
-   * the table.  In this case we will stretch the last column to use the extra space
-   */
-  if (totalWidth < tableWidth) {
-    const lastColumn = mergedColumns[mergedColumns.length - 1];
-    lastColumn.width =
-      (lastColumn.width as number) + Math.floor(tableWidth - totalWidth);
-  }
+  const columnWidthSignature = mergedColumns
+    .map(({ width }) => width)
+    .join(',');
 
   const gridRef = useRef<any>();
   const [connectObject] = useState<any>(() => {
@@ -146,14 +245,18 @@ const VirtualTable = <RecordType extends object>(
     return obj;
   });
 
-  const resetVirtualGrid = () => {
-    gridRef.current?.resetAfterIndices({
+  useEffect(() => {
+    const grid = gridRef.current;
+    if (!grid) {
+      return;
+    }
+
+    grid.resetAfterIndices({
       columnIndex: 0,
+      rowIndex: 0,
       shouldForceUpdate: true,
     });
-  };
-
-  useEffect(() => resetVirtualGrid, [tableWidth, columns, size]);
+  }, [columnWidthSignature, size, tableWidth]);
 
   /*
    * antd Table has a runtime error when it tries to fire the onChange event triggered from a pageChange
@@ -191,62 +294,70 @@ const VirtualTable = <RecordType extends object>(
     ref.current = connectObject;
     const cellSize = size === TableSize.Middle ? MIDDLE : SMALL;
     return (
-      <Grid
-        ref={gridRef}
-        className="virtual-grid"
-        columnCount={mergedColumns.length}
-        columnWidth={(index: number) => {
-          const { width = DEFAULT_COL_WIDTH } = mergedColumns[index];
-          return width as number;
-        }}
-        height={height || (scroll!.y as number)}
-        rowCount={rawData.length}
-        rowHeight={() => cellSize}
-        width={tableWidth}
-        onScroll={({ scrollLeft }: { scrollLeft: number }) => {
-          onScroll({ scrollLeft });
-        }}
-      >
-        {({
-          columnIndex,
-          rowIndex,
-          style,
-        }: {
-          columnIndex: number;
-          rowIndex: number;
-          style: CSSProperties;
-        }) => {
-          const data: any = rawData?.[rowIndex];
-          // Set default content
-          let content =
-            data?.[(mergedColumns as any)?.[columnIndex]?.dataIndex];
-          // Check if the column has a render function
-          const render = mergedColumns[columnIndex]?.render;
-          if (typeof render === 'function') {
-            // Use render function to generate formatted content using column's render function
-            content = render(content, data, rowIndex);
-          }
+      <VirtualGridContentWidthContext.Provider value={contentWidth}>
+        <Grid
+          ref={gridRef}
+          className="virtual-grid"
+          columnCount={mergedColumns.length}
+          estimatedColumnWidth={estimatedColumnWidth}
+          columnWidth={(index: number) => {
+            const { width = DEFAULT_COL_WIDTH } = mergedColumns[index];
+            return width as number;
+          }}
+          height={height || (scroll!.y as number)}
+          innerElementType={VirtualGridInner}
+          rowCount={rawData.length}
+          rowHeight={() => cellSize}
+          width={tableWidth}
+          onScroll={({ scrollLeft }: { scrollLeft: number }) => {
+            onScroll({ scrollLeft });
+          }}
+        >
+          {({
+            columnIndex,
+            rowIndex,
+            style,
+          }: {
+            columnIndex: number;
+            rowIndex: number;
+            style: CSSProperties;
+          }) => {
+            const data: any = rawData?.[rowIndex];
+            // Set default content
+            let content =
+              data?.[(mergedColumns as any)?.[columnIndex]?.dataIndex];
+            // Check if the column has a render function
+            const render = mergedColumns[columnIndex]?.render;
+            if (typeof render === 'function') {
+              // Use render function to generate formatted content using column's render function
+              content = render(content, data, rowIndex);
+            }
 
-          if (allowHTML && typeof content === 'string') {
-            content = safeHtmlSpan(content);
-          }
+            if (allowHTML && typeof content === 'string') {
+              content = safeHtmlSpan(content);
+            }
 
-          return (
-            <StyledCell
-              className={classNames('virtual-table-cell', {
-                'virtual-table-cell-last':
-                  columnIndex === mergedColumns.length - 1,
-              })}
-              style={style}
-              title={typeof content === 'string' ? content : undefined}
-              theme={theme}
-              height={cellSize}
-            >
-              {content}
-            </StyledCell>
-          );
-        }}
-      </Grid>
+            return (
+              <StyledCell
+                className={classNames('virtual-table-cell', {
+                  'virtual-table-cell-last':
+                    columnIndex === mergedColumns.length - 1,
+                })}
+                style={{
+                  ...style,
+                  paddingBlock:
+                    size === TableSize.Middle
+                      ? theme.paddingSM
+                      : theme.paddingXS,
+                }}
+                title={typeof content === 'string' ? content : undefined}
+              >
+                {content}
+              </StyledCell>
+            );
+          }}
+        </Grid>
+      </VirtualGridContentWidthContext.Provider>
     );
   };
 
@@ -265,7 +376,7 @@ const VirtualTable = <RecordType extends object>(
           body: renderVirtualList,
         }}
         pagination={pagination ? modifiedPagination : false}
-        scroll={scroll}
+        scroll={{ ...scroll, x: contentWidth }}
         columns={mergedColumns}
       />
     </div>

@@ -226,17 +226,10 @@ const StyledTable = styled(AntTable as FC<AntTableProps>)<{ height?: number }>(
 const StyledVirtualTable = styled(
   VirtualTable as React.FC<VirtualTableProps<any>>,
 )(
-  ({ theme }) => `
+  () => `
   .virtual-table .ant-table-container:before,
   .virtual-table .ant-table-container:after {
     display: none;
-  }
-  .virtual-table-cell {
-    box-sizing: border-box;
-    padding: ${theme.sizeUnit * 4}px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 `,
 );
@@ -445,7 +438,6 @@ export function Table<RecordType extends object>(
           {...sharedProps}
           scroll={{
             y: 300,
-            x: '100vw',
             // To avoid jest failure by scrollTo
             ...(process.env.WEBPACK_MODE === 'test' && {
               scrollToFirstRowOnChange: false,
