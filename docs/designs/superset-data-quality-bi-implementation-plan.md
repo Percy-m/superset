@@ -21,18 +21,18 @@ under the License.
 
 | 属性          | 值                                                                                                          |
 | ------------- | ----------------------------------------------------------------------------------------------------------- |
-| 文档版本      | V1.3                                                                                                        |
+| 文档版本      | V1.4                                                                                                        |
 | 文档状态      | Implemented（验收持续补充）                                                                                 |
 | 日期          | 2026-08-24                                                                                                  |
 | 需求输入      | 数据质量 BI 增强需求 V1.4                                                                                   |
-| 详细设计      | [数据质量 BI 增强详细设计](./superset-data-quality-bi-detailed-design.md) V1.3                              |
+| 详细设计      | [数据质量 BI 增强详细设计](./superset-data-quality-bi-detailed-design.md) V1.4                              |
 | 补充设计      | [ClickHouse 21.3 兼容与 Drill Detail 表格对齐](./superset-clickhouse-21-3-drill-detail-alignment-design.md) |
 | 原始实现基线  | `dev/6.1`，`c83fb2bb1dcf`（Superset 6.1.0 RC3）                                                             |
 | 增量审计基线  | `dev/6.1`，`5f4c1760262a`                                                                                   |
-| As-built 基线 | `dev/6.1`，`0da4a89de1`                                                                                     |
+| As-built 基线 | `dev/6.1`，`ac5b40bb36`                                                                                     |
 | 数据库基线    | ClickHouse `21.3.20.1`                                                                                      |
 | 文档目标      | 规定 FR-01～FR-05 的严格实施顺序、代码内容和逐项验收门禁                                                    |
-| 功能代码状态  | FR-01～FR-05 已提交；CH-13/UI-DTD-01 为 `c18ed1fd02`；Header 图标化由 `0da4a89de1` 实现并验证               |
+| 功能代码状态  | FR-01～FR-05 已提交；CH-13/UI-DTD-01 为 `c18ed1fd02`；Header 色块化由 `ac5b40bb36` 实现并验证               |
 
 ## 1. 计划结论
 
@@ -376,38 +376,40 @@ interface AlertRuleExtension {
 }
 ```
 
-Table Header 运行时筛选菜单使用图标而不是直接显示 `RED/YELLOW/GREEN`：
+Table Header 运行时筛选菜单使用无方向性颜色块，而不是直接显示 `RED/YELLOW/GREEN` 或状态图标：
 
-> FR-02 原提交仍显示原始枚举文字；V1.3 follow-up `0da4a89de1` 已修改
-> `TableChart.tsx` 和对应测试，只替换运行时菜单展示与可访问语义，不修改协议或 Explore
-> 条件格式编辑器。
+> FR-02 原提交仍显示原始枚举文字；V1.3 follow-up `0da4a89de1` 将文字替换为可访问状态图标；
+> V1.4 follow-up `ac5b40bb36` 再将状态图标替换为统一的颜色块。两次修改都只调整运行时菜单
+> 展示与可访问语义，不修改协议或 Explore 条件格式编辑器。
 
-| 内部等级 | 图标                        | 主题色               | 可访问名称 |
-| -------- | --------------------------- | -------------------- | ---------- |
-| `RED`    | `Icons.StopOutlined`        | `theme.colorError`   | 严重告警   |
-| `YELLOW` | `Icons.WarningOutlined`     | `theme.colorWarning` | 警告告警   |
-| `GREEN`  | `Icons.CheckCircleOutlined` | `theme.colorSuccess` | 正常状态   |
+| 内部等级 | 可见色块           | 主题色               | 可访问名称 |
+| -------- | ------------------ | -------------------- | ---------- |
+| `RED`    | `AlertLevelSwatch` | `theme.colorError`   | 严重告警   |
+| `YELLOW` | `AlertLevelSwatch` | `theme.colorWarning` | 警告告警   |
+| `GREEN`  | `AlertLevelSwatch` | `theme.colorSuccess` | 正常状态   |
 
-图标必须来自 `@superset-ui/core/components`，并保留 Tooltip、本地化隐藏文本、
-`menuitemcheckbox`、选中勾、`aria-checked`、disabled 和键盘操作。三种形状必须不同，
-不能只用颜色区分。Explore 条件格式编辑器继续显示本地化文字；DataMask、QueryObject、
-Permalink 和服务端协议仍使用原枚举，不因图标化发生变化。
+三个等级使用相同的 16×16 px 圆角方块和主题语义色，不使用 Stop、Warning、CheckCircle 等
+带状态导向的 glyph。色块 `aria-hidden`；Tooltip、本地化隐藏文本、`menuitemcheckbox`、
+选中勾、`aria-checked`、disabled 和键盘操作确保语义与选中状态不只依赖颜色。Explore
+条件格式编辑器继续显示本地化文字；DataMask、QueryObject、Permalink 和服务端协议仍使用
+原枚举，不因色块化发生变化。
 
 ### 5.3 代码范围
 
-| 层次                     | 主要文件或新增模块                                                      | 实现内容                                   |
-| ------------------------ | ----------------------------------------------------------------------- | ------------------------------------------ |
-| 公共类型                 | `packages/superset-ui-chart-controls/src/types.ts`                      | 稳定规则 ID、subject、level、filterable    |
-| 控件类型                 | `src/explore/components/controls/ConditionalFormattingControl/types.ts` | 编辑器类型同步                             |
-| 条件格式 UI              | `ConditionalFormattingControl` 相关 TSX                                 | 创建 UUID、过滤资格校验、复制生成新 ID     |
-| Table UI                 | `plugins/plugin-chart-table/src/TableChart.tsx`                         | Header 等级多选和 ownState 更新            |
-| UI Follow-up（As-built） | `plugins/plugin-chart-table/src/TableChart.tsx`                         | `0da4a89de1`：图标、Tooltip、a11y 和主题色 |
-| Query 构造               | `plugins/plugin-chart-table/src/buildQuery.ts`                          | data、rowcount、totals、download 传引用    |
-| Schema                   | `superset/charts/schemas.py`                                            | 严格嵌套 `alert_filters`                   |
-| 规则服务                 | 新增 `superset/common/table_alerts.py`                                  | 保存 Slice 规则验证、谓词、指纹            |
-| 查询关系                 | QueryObject/SQLA 查询构建相关模块                                       | WHERE、HAVING、Qualified Relation          |
-| 后端测试                 | `tests/unit_tests/common/`、Chart Data 集成测试                         | 伪造规则、SQL 位置、缓存和一致性           |
-| 前端测试                 | Table、buildQuery、条件格式控件测试                                     | 规则生命周期、Header、布尔组合             |
+| 层次                        | 主要文件或新增模块                                                      | 实现内容                                   |
+| --------------------------- | ----------------------------------------------------------------------- | ------------------------------------------ |
+| 公共类型                    | `packages/superset-ui-chart-controls/src/types.ts`                      | 稳定规则 ID、subject、level、filterable    |
+| 控件类型                    | `src/explore/components/controls/ConditionalFormattingControl/types.ts` | 编辑器类型同步                             |
+| 条件格式 UI                 | `ConditionalFormattingControl` 相关 TSX                                 | 创建 UUID、过滤资格校验、复制生成新 ID     |
+| Table UI                    | `plugins/plugin-chart-table/src/TableChart.tsx`                         | Header 等级多选和 ownState 更新            |
+| UI Follow-up 01（As-built） | `plugins/plugin-chart-table/src/TableChart.tsx`                         | `0da4a89de1`：图标、Tooltip、a11y 和主题色 |
+| UI Follow-up 02（As-built） | `plugins/plugin-chart-table/src/TableChart.tsx`                         | `ac5b40bb36`：统一无方向性色块并保留 a11y  |
+| Query 构造                  | `plugins/plugin-chart-table/src/buildQuery.ts`                          | data、rowcount、totals、download 传引用    |
+| Schema                      | `superset/charts/schemas.py`                                            | 严格嵌套 `alert_filters`                   |
+| 规则服务                    | 新增 `superset/common/table_alerts.py`                                  | 保存 Slice 规则验证、谓词、指纹            |
+| 查询关系                    | QueryObject/SQLA 查询构建相关模块                                       | WHERE、HAVING、Qualified Relation          |
+| 后端测试                    | `tests/unit_tests/common/`、Chart Data 集成测试                         | 伪造规则、SQL 位置、缓存和一致性           |
+| 前端测试                    | Table、buildQuery、条件格式控件测试                                     | 规则生命周期、Header、布尔组合             |
 
 ### 5.4 可信边界和查询设计
 
@@ -482,13 +484,15 @@ flowchart LR
 | FR2-10             | 完成样式优先级、NULL、Decimal 和重叠规则前端回归          | 屏幕样式不因筛选实现而退化                   |
 | FR2-11             | 完成权限、RLS、ClickHouse 21.3 和组合测试                 | FR-02 门禁签字后才允许开始 FR-03             |
 | FR2-UI-FOLLOWUP-01 | 将等级文字替换为图标并补齐 a11y                           | `0da4a89de1`；110 项目标 Jest 与本机 UI 通过 |
+| FR2-UI-FOLLOWUP-02 | 将等级状态图标替换为无方向性颜色块并保留 a11y             | `ac5b40bb36`；110 项目标 Jest 与本机 UI 通过 |
 
 ### 5.7 测试和完成定义
 
 As-built 覆盖详细设计中的 TC-FR02-01～TC-FR02-12：Header 等级多选与 disabled/键盘状态、
 同列 OR、跨列 AND、WHERE/HAVING、伪造规则、旧规则、缓存键、分页/计数/totals/download
-一致性和 Cell Bar 独立性。`FR2-UI-FOLLOWUP-01` 另外覆盖图标、Tooltip、可访问名称、主题色、
-选中勾、Feature Flag 和不显示原始枚举文字；三个目标测试文件 `110/110` 通过，
+一致性和 Cell Bar 独立性。`FR2-UI-FOLLOWUP-01/02` 另外覆盖无方向性颜色块、Tooltip、
+可访问名称、主题色、选中勾、Feature Flag、不显示原始枚举文字和不渲染旧状态 glyph；
+三个目标测试文件 `110/110` 通过，
 `npm run type`、目标 pre-commit 以及 Dashboard 3 鼠标/Enter 的 `97 → 48 → 97` 验收通过。
 
 ClickHouse 使用 `fact_sales` 的 RED 207、YELLOW 5,937、GREEN 13,856 基线，并额外覆盖
