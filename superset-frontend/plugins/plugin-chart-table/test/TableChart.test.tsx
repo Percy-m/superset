@@ -123,9 +123,9 @@ test('table header alert menu updates ownState and resets server pagination', as
       name: 'Warning alert',
     });
     expect(disabledWarning).toHaveAttribute('aria-disabled', 'true');
-    expect(within(disabledWarning).getByTestId('warning')).toHaveStyle(
-      `color: ${supersetTheme.colorTextDisabled}`,
-    );
+    expect(
+      within(disabledWarning).getByTestId('alert-level-swatch-yellow'),
+    ).toHaveStyle(`background-color: ${supersetTheme.colorTextDisabled}`);
     fireEvent.click(redAlert);
 
     await waitFor(() => {
@@ -184,7 +184,7 @@ test('table header alert menu stays hidden when feature flag is disabled', () =>
   }
 });
 
-test('table header alert menu uses accessible status icons and tooltips', async () => {
+test('table header alert menu uses accessible color swatches and tooltips', async () => {
   const previousFlags = window.featureFlags;
   window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
   const redRuleId = '772a548e-72f7-4ac8-a8ff-fdb7465b3ccd';
@@ -271,15 +271,39 @@ test('table header alert menu uses accessible status icons and tooltips', async 
       'true',
     );
 
-    const redIcon = within(redAlert).getByTestId('stop');
-    const yellowIcon = within(yellowAlert).getByTestId('warning');
-    const greenIcon = within(greenAlert).getByTestId('check-circle');
-    expect(redIcon).toHaveAttribute('aria-hidden', 'true');
-    expect(yellowIcon).toHaveAttribute('aria-hidden', 'true');
-    expect(greenIcon).toHaveAttribute('aria-hidden', 'true');
-    expect(redIcon).toHaveStyle(`color: ${supersetTheme.colorError}`);
-    expect(yellowIcon).toHaveStyle(`color: ${supersetTheme.colorWarning}`);
-    expect(greenIcon).toHaveStyle(`color: ${supersetTheme.colorSuccess}`);
+    const redSwatch = within(redAlert).getByTestId('alert-level-swatch-red');
+    const yellowSwatch = within(yellowAlert).getByTestId(
+      'alert-level-swatch-yellow',
+    );
+    const greenSwatch = within(greenAlert).getByTestId(
+      'alert-level-swatch-green',
+    );
+    expect(redSwatch).toHaveAttribute('aria-hidden', 'true');
+    expect(yellowSwatch).toHaveAttribute('aria-hidden', 'true');
+    expect(greenSwatch).toHaveAttribute('aria-hidden', 'true');
+    expect(redSwatch).not.toHaveAttribute('swatchcolor');
+    expect(redSwatch).toHaveStyle({
+      backgroundColor: supersetTheme.colorError,
+      width: `${supersetTheme.sizeUnit * 4}px`,
+      height: `${supersetTheme.sizeUnit * 4}px`,
+    });
+    expect(yellowSwatch).toHaveStyle({
+      backgroundColor: supersetTheme.colorWarning,
+      width: `${supersetTheme.sizeUnit * 4}px`,
+      height: `${supersetTheme.sizeUnit * 4}px`,
+    });
+    expect(greenSwatch).toHaveStyle({
+      backgroundColor: supersetTheme.colorSuccess,
+      width: `${supersetTheme.sizeUnit * 4}px`,
+      height: `${supersetTheme.sizeUnit * 4}px`,
+    });
+    expect(within(redAlert).queryByTestId('stop')).not.toBeInTheDocument();
+    expect(
+      within(yellowAlert).queryByTestId('warning'),
+    ).not.toBeInTheDocument();
+    expect(
+      within(greenAlert).queryByTestId('check-circle'),
+    ).not.toBeInTheDocument();
 
     const hiddenRedLabel = within(redAlert).getByText('Critical alert');
     expect(hiddenRedLabel).toHaveStyle({

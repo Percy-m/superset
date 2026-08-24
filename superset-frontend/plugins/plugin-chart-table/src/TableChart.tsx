@@ -247,6 +247,22 @@ const VisuallyHidden = styled.label`
   border: 0;
 `;
 
+const AlertLevelLabelContent = styled.span`
+  display: inline-flex;
+  align-items: center;
+`;
+
+const AlertLevelSwatch = styled.span<{ swatchColor: string }>`
+  display: inline-block;
+  width: ${({ theme }) => theme.sizeUnit * 4}px;
+  height: ${({ theme }) => theme.sizeUnit * 4}px;
+  flex: none;
+  box-sizing: border-box;
+  background-color: ${({ swatchColor }) => swatchColor};
+  border: 1px solid ${({ theme }) => theme.colorBorderSecondary};
+  border-radius: ${({ theme }) => theme.borderRadiusXS}px;
+`;
+
 function AlertLevelMenuLabel({
   disabled,
   level,
@@ -261,28 +277,24 @@ function AlertLevelMenuLabel({
   const presentations = {
     RED: {
       color: theme.colorError,
-      icon: Icons.StopOutlined,
       label: t('Critical alert'),
     },
     YELLOW: {
       color: theme.colorWarning,
-      icon: Icons.WarningOutlined,
       label: t('Warning alert'),
     },
     GREEN: {
       color: theme.colorSuccess,
-      icon: Icons.CheckCircleOutlined,
       label: t('Normal status'),
     },
   } satisfies Record<
     AlertLevel,
     {
       color: string;
-      icon: typeof Icons.StopOutlined;
       label: string;
     }
   >;
-  const { color, icon: AlertIcon, label } = presentations[level];
+  const { color, label } = presentations[level];
 
   useEffect(() => {
     const menuItem = labelRef.current?.closest<HTMLElement>(
@@ -311,20 +323,14 @@ function AlertLevelMenuLabel({
       title={label}
       trigger={['hover', 'focus']}
     >
-      <span
-        ref={labelRef}
-        css={css`
-          display: inline-flex;
-          align-items: center;
-        `}
-      >
-        <AlertIcon
+      <AlertLevelLabelContent ref={labelRef}>
+        <AlertLevelSwatch
           aria-hidden
-          iconColor={disabled ? theme.colorTextDisabled : color}
-          iconSize="m"
+          data-test={`alert-level-swatch-${level.toLowerCase()}`}
+          swatchColor={disabled ? theme.colorTextDisabled : color}
         />
         <VisuallyHidden as="span">{label}</VisuallyHidden>
-      </span>
+      </AlertLevelLabelContent>
     </Tooltip>
   );
 }
