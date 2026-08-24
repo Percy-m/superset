@@ -21,7 +21,7 @@ under the License.
 
 | 属性          | 值                                                                                                          |
 | ------------- | ----------------------------------------------------------------------------------------------------------- |
-| 文档版本      | V1.9                                                                                                        |
+| 文档版本      | V1.11                                                                                                       |
 | 文档状态      | Implemented（验收持续补充）                                                                                 |
 | 日期          | 2026-08-24                                                                                                  |
 | 输入需求      | 《Superset 6.0 数据质量 BI 增强需求分析与设计文档》V1.4                                                     |
@@ -467,6 +467,14 @@ QueryContext 创建期间，使用 `form_data.slice_id` 加载保存 Slice，并
 - subject 仍属于该 Slice 的 Dataset；
 - operator 和阈值仍可被安全编译。
 
+保存 Slice 在此处是服务端可信配置，不是独立授权凭据。首先仍按 `ChartFilter` 读取；仅当
+Guest 或 Dashboard RBAC 用户没有直接 Dataset ACL 时，才允许从已通过当前身份
+`can_access_dashboard()` 校验的 Dashboard 中解析 Slice，并同时验证 Slice 是该 Dashboard
+成员且与请求 Dataset 一致。Native Filter QueryContext 不允许走该 fallback，避免借用无关
+Chart 配置。配置读取后仍必须在查询执行前调用 `QueryContext.raise_for_access()` 并应用
+RLS；`TableRuleResolver` 再次校验 Slice 与 Dataset 绑定。不存在、无权限、跨 Dashboard
+和跨 Dataset 的 Slice 都不能参与规则或样式解析。
+
 规则按 subject 分组：同一 subject 的所有选中规则用 OR，不同 subject 组用 AND。
 例如 `(revenue > 100 OR revenue < 0) AND margin <= 0.1`。选择顺序不影响语义。
 
@@ -517,6 +525,11 @@ operator、阈值和 level，再计算 SHA-256 指纹。QueryObject cache key �
 - 选择顺序不同但语义相同可命中同一缓存；
 - 保存规则阈值改变后不会复用旧结果；
 - 客户端无法通过自造指纹影响缓存。
+
+`GLOBAL_ASYNC_QUERIES` 的 QueryContext 缓存同时保留经 schema 校验、排序和去重后的
+`alert_filters` 引用，以及服务端生成的规范条件和指纹。缓存回读时仍先删除所有内部告警
+`extras`，再用保存 Slice 重新解析引用；不得把缓存外形变成“信任客户端内部 extras”的旁路。
+因此规则未变时重建相同 QueryObject cache key，规则修改或删除后旧结果不能被错误复用。
 
 ## 7. FR-03：分享链接携带筛选状态
 
@@ -599,22 +612,31 @@ Chart Data QueryContext 顶层 schema 增加：
   "result_format": "xlsx",
   "result_type": "full",
   "result_format_options": {
-    "styled": true
+    "styled": true,
+    "xlsx_primary_query_only": true
   }
 }
 ```
 
-`styled` 默认 `false`。只有以下条件全部满足时进入带样式路径：
+`styled` 和 `xlsx_primary_query_only` 均默认 `false`。只有以下条件全部满足时进入带样式路径：
 
 - `STYLED_XLSX_EXPORT` 开启；
 - `result_format=xlsx`；
 - `styled=true`；
-- `form_data.slice_id` 指向用户可访问的保存 Chart；
+- `form_data.slice_id` 指向与请求 Dataset 匹配的保存 Chart，且 QueryContext 权限校验通过；
 - Chart 的 `viz_type` 是经典 Table。
 
 不满足后两项时返回 `STYLED_XLSX_UNSUPPORTED`（400），不得信任请求中的
 `conditional_formatting`。Flag 关闭或没有 `styled=true` 时继续调用现有
 `df_to_excel`，保证旧 API 完全兼容。
+
+经典 Table 的 `buildQuery` 可能因 `show_totals` 或 all-records 百分比计算生成内部辅助
+QueryObject。`xlsx_primary_query_only=true` 是显式响应投影契约：完整 QueryContext 仍执行并
+经过相同权限、RLS、缓存和错误处理，但成功响应只返回 `queries[0]` 的 XLSX。该选项仅在
+Flag 开启、`styled=true`、`result_format=xlsx` 且保存经典 Table 准入成功时允许；其他组合
+返回 400，不静默忽略。未显式请求该选项的未知多查询仍返回既有 ZIP；未请求 styled、Flag
+关闭或 CSV 多查询同样沿用旧行为。Dashboard Tab XLSX 的 totals 仍由其独立 command 写入
+各数据 Sheet。
 
 ### 8.2 Dashboard Tab 导出 API
 
@@ -869,7 +891,7 @@ endpoint 原始响应。
 | `ConditionalFormattingConfig` | 可选规则 ID、subject、level、filterable | 旧规则仅显示，不可筛选           |
 | `dataMask.ownState`           | 可选 `alertFilters`                     | 其他 ownState 不分享             |
 | `ChartDataQueryObjectSchema`  | 可选 `alert_filters`                    | Flag 关闭时前端不发送            |
-| QueryContext                  | 可选 `result_format_options.styled`     | 默认 false，沿用旧 XLSX          |
+| QueryContext                  | 可选 `result_format_options.styled`、`xlsx_primary_query_only` | 默认 false，沿用旧 XLSX          |
 | Dashboard API                 | 新增 `POST /{id}/export_xlsx/`          | 独立能力，无旧调用方             |
 | SQL Lab 导航                  | 新窗口统一 POST `form_data`             | 后端协议不变                     |
 
@@ -1329,9 +1351,10 @@ REST 和权限用例标记 Environment Blocked，不得伪报通过。
 | TC-FR02-10 | Decimal 边界 -100、50、100、500   | 比较屏幕色、筛选和导出样式            | 边界包含关系一致，无 Float 精度漂移                        |
 | TC-FR02-11 | 重叠背景/文字/整行规则            | 导出并读取 workbook styles            | 每个样式维度最后一个命中规则生效，与前端 fixture 一致      |
 | TC-FR02-12 | APAC RLS + GREEN 告警             | 查询/导出                             | RLS 先约束事实集合，告警在授权结果上求值，不能越权         |
+| TC-FR02-13 | 无直接 Dataset ACL 的授权 Guest   | 以 Dashboard Chart + alert + RLS 查询 | 保存规则可解析且返回 200；仅含 RLS 行；伪造 Slice 仍拒绝   |
 
 `FR2-UI-FOLLOWUP-01（As-built：0da4a89de1）` 与
-`FR2-UI-FOLLOWUP-02（As-built：ac5b40bb36）` 是增量展示验收，不计入上述 12 个 FR-02
+`FR2-UI-FOLLOWUP-02（As-built：ac5b40bb36）` 是增量展示验收，不计入上述 13 个 FR-02
 用例，也不改变原 61 个详细用例的统计口径：
 
 | ID            | 检查点                                    | 自动化或实测证据                                               | 结果 |
@@ -1377,6 +1400,8 @@ REST 和权限用例标记 Environment Blocked，不得伪报通过。
 | TC-FR04-12 | Native + Cross + alert 组合状态                                        | 比较 Dashboard 屏幕和 XLSX            | 每个 Sheet 行数、关键聚合和 totals 一致                   |
 | TC-FR04-13 | 10 个 10k 级 Table                                                     | 记录查询和进程内存                    | 查询严格串行；峰值不随 Sheet 数线性累积；全程无 OOM       |
 | TC-FR04-14 | 大 cell/8 MiB fixture                                                  | 导出                                  | 在 Workbook 创建前按产品上限拒绝，不生成损坏文件          |
+| TC-FR04-15 | 经典 Table、`show_totals=true`、styled Flag                            | 从单图菜单导出                        | 响应为可直接打开的 `.xlsx`；内部 totals 不产生外层 ZIP    |
+| TC-FR04-16 | styled 多查询未传/非法传响应投影选项                                  | 分别请求 XLSX、CSV、Flag 关闭态        | 未传保持 ZIP；非法组合 400；其他格式不丢弃后续查询        |
 
 ### 18.6 FR-05 测试用例
 

@@ -80,7 +80,10 @@ test('saved classic Table XLSX requests server-owned styles when enabled', async
     resultType: 'results',
   });
 
-  expect(payload.result_format_options).toEqual({ styled: true });
+  expect(payload.result_format_options).toEqual({
+    styled: true,
+    xlsx_primary_query_only: true,
+  });
 });
 
 test.each([

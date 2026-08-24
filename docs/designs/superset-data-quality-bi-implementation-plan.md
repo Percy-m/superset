@@ -21,11 +21,11 @@ under the License.
 
 | 属性         | 值                                                                                                                 |
 | ------------ | ------------------------------------------------------------------------------------------------------------------ |
-| 文档版本     | V1.10                                                                                                              |
+| 文档版本     | V1.12                                                                                                              |
 | 文档状态     | Implemented（验收持续补充）                                                                                        |
 | 日期         | 2026-08-24                                                                                                         |
 | 需求输入     | 数据质量 BI 增强需求 V1.4                                                                                          |
-| 详细设计     | [数据质量 BI 增强详细设计](./superset-data-quality-bi-detailed-design.md) V1.9                                     |
+| 详细设计     | [数据质量 BI 增强详细设计](./superset-data-quality-bi-detailed-design.md) V1.11                                    |
 | 补充设计     | [ClickHouse 21.3 兼容与 Drill Detail 表格对齐](./superset-clickhouse-21-3-drill-detail-alignment-design.md) V1.5   |
 | 原始实现基线 | `dev/6.1`，`c83fb2bb1dcf`（Superset 6.1.0 RC3）                                                                    |
 | 增量审计基线 | `dev/6.1`，`5f4c1760262a`                                                                                          |
@@ -33,7 +33,7 @@ under the License.
 | 补漏提交     | FR5-05 DatasourceEditor：`a370543223`；CH-14/FR1-FIX-01：本文所在 commit；证据见独立验证计划                       |
 | 数据库基线   | ClickHouse `21.3.20.1`                                                                                             |
 | 文档目标     | 规定 FR-01～FR-05 的严格实施顺序、代码内容和逐项验收门禁                                                           |
-| 功能代码状态 | FR-01～FR-05 已提交；DatasourceEditor、ClickHouse Code 36、Guest XLSX 上下文及 FR-01 ClickHouse 复杂类型补漏已实现 |
+| 功能代码状态 | FR-01～FR-05 已提交；补漏验证发现的 Guest 告警规则读取和单图 styled XLSX 响应编排已实现                            |
 
 补漏实现和发布验证债务的严格执行顺序、环境转换与证据记录归档在
 [数据质量 BI 增强补漏与验证执行计划](./superset-data-quality-bi-validation-execution-plan.md)。
@@ -633,7 +633,8 @@ Chart Data QueryContext 顶层增加：
   "result_format": "xlsx",
   "result_type": "full",
   "result_format_options": {
-    "styled": true
+    "styled": true,
+    "xlsx_primary_query_only": true
   }
 }
 ```
@@ -641,6 +642,15 @@ Chart Data QueryContext 顶层增加：
 `styled` 默认 false。只有 Flag 开启、请求 XLSX、显式 styled、保存 Slice 可访问且
 `viz_type=table` 时进入样式路径。样式必须从保存 Slice 读取；请求内携带的
 `conditional_formatting` 不可信。普通 XLSX 继续走现有 `df_to_excel`。
+
+Table 的 `show_totals` 和 all-records 百分比会保留内部辅助 QueryObject。保存 Table 的
+styled 单图下载显式设置 `xlsx_primary_query_only=true`：所有 QueryObject 仍执行，但响应仅
+投影第一个 workbook。服务端只在 Flag 开启、XLSX、styled 和保存经典 Table 全部准入后
+接受该选项；未传时未知多查询、普通多查询 XLSX 和 CSV 保持原 ZIP，非法组合返回 400。
+保存 Slice 首先按 `ChartFilter` 读取；Guest 或具备实际 Dashboard role grant 的 RBAC 用户
+才可从已鉴权 Dashboard fallback，且必须验证非 Native Filter、Slice 属于 Dashboard、
+Dataset 一致，查询执行前继续应用 RLS。异步 QueryContext 缓存保留规范化规则引用供回读
+重新解析，不信任缓存外形中的客户端内部 extras。
 
 ### 7.3 Dashboard Tab API 和代码范围
 

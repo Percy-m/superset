@@ -18,7 +18,8 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from superset.common.chart_data import ChartDataResultFormat
+from superset.charts.schemas import ChartDataQueryContextSchema
+from superset.common.chart_data import ChartDataResultFormat, ChartDataResultType
 from superset.common.query_context_factory import QueryContextFactory
 from superset.common.query_object import QueryObject
 from superset.common.table_alerts import (
@@ -63,9 +64,15 @@ class TestQueryContextFactory:
                 queries=[],
                 form_data={"slice_id": 9},
                 result_format=ChartDataResultFormat.XLSX,
-                result_format_options={"styled": True},
+                result_format_options={
+                    "styled": True,
+                    "xlsx_primary_query_only": True,
+                },
             )
-            assert query_context.result_format_options == {"styled": True}
+            assert query_context.result_format_options == {
+                "styled": True,
+                "xlsx_primary_query_only": True,
+            }
 
             slice_.viz_type = "pie"
             with pytest.raises(
@@ -79,6 +86,40 @@ class TestQueryContextFactory:
                     form_data={"slice_id": 9},
                     result_format=ChartDataResultFormat.XLSX,
                     result_format_options={"styled": True},
+                )
+
+            slice_.viz_type = "table"
+            with pytest.raises(
+                QueryObjectValidationError,
+                match="STYLED_XLSX_UNSUPPORTED",
+            ):
+                self.factory.create(
+                    current_slice=slice_,
+                    datasource={"id": 7, "type": "table"},
+                    queries=[],
+                    form_data={"slice_id": 9},
+                    result_format=ChartDataResultFormat.CSV,
+                    result_format_options={
+                        "styled": False,
+                        "xlsx_primary_query_only": True,
+                    },
+                )
+
+            mock_is_feature_enabled.return_value = False
+            with pytest.raises(
+                QueryObjectValidationError,
+                match="STYLED_XLSX_UNSUPPORTED",
+            ):
+                self.factory.create(
+                    current_slice=slice_,
+                    datasource={"id": 7, "type": "table"},
+                    queries=[],
+                    form_data={"slice_id": 9},
+                    result_format=ChartDataResultFormat.XLSX,
+                    result_format_options={
+                        "styled": True,
+                        "xlsx_primary_query_only": True,
+                    },
                 )
 
     @patch("superset.common.query_context_factory.is_feature_enabled")
@@ -98,6 +139,27 @@ class TestQueryContextFactory:
         assert result == {"columns": ["region"]}
         assert "alert_filters" in query
         assert "is_table_alert_totals" in query
+
+    @patch("superset.common.query_context_factory.is_feature_enabled")
+    def test_resolve_table_alerts_replaces_client_internal_extras(
+        self,
+        mock_is_feature_enabled,
+    ):
+        """Client-provided alert implementation details never survive resolution."""
+        mock_is_feature_enabled.return_value = False
+        query = {
+            "columns": ["region"],
+            "extras": {
+                ALERT_FILTERS_EXTRA_KEY: [{"forged": True}],
+                ALERT_FILTER_FINGERPRINT_EXTRA_KEY: "forged",
+                ALERT_TOTALS_EXTRA_KEY: True,
+            },
+        }
+
+        result = self.factory._resolve_table_alerts(query, None, None)
+
+        assert result["extras"] == {}
+        assert query["extras"][ALERT_FILTER_FINGERPRINT_EXTRA_KEY] == "forged"
 
     @patch("superset.common.query_context_factory.TableRuleResolver")
     @patch("superset.common.query_context_factory.is_feature_enabled")
@@ -162,6 +224,136 @@ class TestQueryContextFactory:
         }
         assert query["alert_filters"] == references
         assert query["is_table_alert_totals"] is True
+
+        cached_query = self.factory._query_for_cache(query, result)
+        assert cached_query["alert_filters"] == references
+        assert cached_query["is_table_alert_totals"] is True
+
+        rehydrated = self.factory._resolve_table_alerts(
+            cached_query,
+            slice_,
+            datasource,
+        )
+        assert rehydrated == result
+
+    @patch("superset.common.query_context_factory.TableRuleResolver")
+    @patch("superset.common.query_context_factory.is_feature_enabled")
+    def test_async_alert_query_context_cache_round_trip(
+        self,
+        mock_is_feature_enabled,
+        mock_resolver_class,
+    ):
+        """Cached alert references rebuild identical main and totals cache keys."""
+        mock_is_feature_enabled.side_effect = (
+            lambda feature: feature == "TABLE_ALERT_FILTERS"
+        )
+        alert_groups = [
+            {
+                "kind": "saved_metric",
+                "key": "gross_revenue",
+                "rules": [
+                    {
+                        "rule_id": "772a548e-72f7-4ac8-a8ff-fdb7465b3ccd",
+                        "operator": "<",
+                        "target_value": "0",
+                    }
+                ],
+            }
+        ]
+        mock_resolver_class.return_value.resolve.return_value = (
+            alert_groups,
+            "rule-fingerprint",
+        )
+        slice_ = Slice(
+            id=9,
+            viz_type="table",
+            datasource_type="table",
+            datasource_id=7,
+        )
+        datasource = Mock(
+            id=7,
+            uid="7__table",
+            columns=[],
+            metrics=[],
+            database=None,
+        )
+        references = [
+            {
+                "rule_id": "772a548e-72f7-4ac8-a8ff-fdb7465b3ccd",
+                "level": "RED",
+            }
+        ]
+        raw_queries = [
+            {
+                "columns": ["region"],
+                "metrics": ["gross_revenue"],
+                "alert_filters": references,
+                "extras": {"where": ""},
+            },
+            {
+                "columns": ["region"],
+                "metrics": ["gross_revenue"],
+                "alert_filters": references,
+                "is_table_alert_totals": True,
+                "row_limit": 0,
+                "extras": {"where": ""},
+            },
+        ]
+
+        with (
+            patch.object(self.factory, "_convert_to_model", return_value=datasource),
+            patch.object(
+                self.factory._query_object_factory,
+                "_convert_to_model",
+                return_value=datasource,
+            ),
+            patch.object(
+                self.factory,
+                "_process_query_object",
+                side_effect=lambda _datasource, _form_data, query: query,
+            ),
+        ):
+            first = self.factory.create(
+                current_slice=slice_,
+                datasource={"id": 7, "type": "table"},
+                queries=raw_queries,
+                form_data={"slice_id": 9},
+                result_format=ChartDataResultFormat.JSON,
+                result_type=ChartDataResultType.FULL,
+            )
+
+        second_factory = QueryContextFactory()
+        schema = ChartDataQueryContextSchema()
+        schema.query_context_factory = second_factory
+        with (
+            patch.object(second_factory, "_convert_to_model", return_value=datasource),
+            patch.object(second_factory, "_get_slice", return_value=slice_),
+            patch.object(
+                second_factory._query_object_factory,
+                "_convert_to_model",
+                return_value=datasource,
+            ),
+            patch.object(
+                second_factory,
+                "_process_query_object",
+                side_effect=lambda _datasource, _form_data, query: query,
+            ),
+        ):
+            second = schema.load(
+                {
+                    "form_data": first.form_data,
+                    **first.cache_values,
+                }
+            )
+
+        assert [query.cache_key() for query in second.queries] == [
+            query.cache_key() for query in first.queries
+        ]
+        assert all(
+            query["alert_filters"] == references
+            for query in second.cache_values["queries"]
+        )
+        assert second.cache_values["queries"][1]["is_table_alert_totals"] is True
 
     def test_extract_tooltip_columns_dict_items(self):
         """Test _extract_tooltip_columns with dict items in tooltip_contents"""
@@ -393,7 +585,7 @@ class TestQueryContextFactory:
         mock_slice = Mock(spec=Slice)
         mock_dao.find_by_id.return_value = mock_slice
 
-        result = self.factory._get_slice(slice_id)
+        result = self.factory._get_slice(slice_id, {}, Mock(id=7))
 
         mock_dao.find_by_id.assert_called_once_with(slice_id)
         assert result == mock_slice
@@ -404,10 +596,112 @@ class TestQueryContextFactory:
         slice_id = 123
         mock_dao.find_by_id.return_value = None
 
-        result = self.factory._get_slice(slice_id)
+        result = self.factory._get_slice(slice_id, {}, Mock(id=7))
 
         mock_dao.find_by_id.assert_called_once_with(slice_id)
         assert result is None
+
+    @patch("superset.common.query_context_factory.is_feature_enabled")
+    @patch("superset.common.query_context_factory.security_manager")
+    @patch("superset.common.query_context_factory.DashboardDAO")
+    @patch("superset.common.query_context_factory.ChartDAO")
+    def test_get_slice_falls_back_to_authorized_dashboard_chart(
+        self,
+        mock_chart_dao,
+        mock_dashboard_dao,
+        mock_security_manager,
+        mock_is_feature_enabled,
+    ):
+        """Dashboard grants can resolve only a chart in the authorized dashboard."""
+        slice_id = 123
+        datasource = Mock(id=7)
+        dashboard_chart = Mock(spec=Slice, id=slice_id, datasource_id=7)
+        dashboard = Mock(slices=[dashboard_chart])
+        mock_chart_dao.find_by_id.return_value = None
+        mock_dashboard_dao.find_by_id.return_value = dashboard
+        mock_security_manager.is_guest_user = Mock(return_value=True)
+        mock_security_manager.can_access_dashboard = Mock(return_value=True)
+        mock_is_feature_enabled.return_value = False
+
+        result = self.factory._get_slice(
+            slice_id,
+            {"dashboardId": 9},
+            datasource,
+        )
+
+        mock_dashboard_dao.find_by_id.assert_called_once_with(
+            9,
+            skip_base_filter=True,
+        )
+        mock_security_manager.can_access_dashboard.assert_called_once_with(dashboard)
+        assert result == dashboard_chart
+
+    @pytest.mark.parametrize("dashboard_roles", [[], [Mock(id=6)]])
+    @patch("superset.common.query_context_factory.is_feature_enabled")
+    @patch("superset.common.query_context_factory.security_manager")
+    @patch("superset.common.query_context_factory.DashboardDAO")
+    @patch("superset.common.query_context_factory.ChartDAO")
+    def test_get_slice_dashboard_rbac_requires_an_assigned_role(
+        self,
+        mock_chart_dao,
+        mock_dashboard_dao,
+        mock_security_manager,
+        mock_is_feature_enabled,
+        dashboard_roles,
+    ):
+        """The global flag alone cannot lend config from an unprotected Dashboard."""
+        dashboard_chart = Mock(spec=Slice, id=123, datasource_id=7)
+        mock_chart_dao.find_by_id.return_value = None
+        mock_dashboard_dao.find_by_id.return_value = Mock(
+            roles=dashboard_roles,
+            slices=[dashboard_chart],
+        )
+        mock_security_manager.is_guest_user = Mock(return_value=False)
+        mock_security_manager.can_access_dashboard = Mock(return_value=True)
+        mock_is_feature_enabled.return_value = True
+
+        result = self.factory._get_slice(123, {"dashboardId": 9}, Mock(id=7))
+
+        assert result == (dashboard_chart if dashboard_roles else None)
+
+    @pytest.mark.parametrize(
+        ("form_data", "dashboard_authorized", "chart_datasource_id"),
+        [
+            ({"dashboardId": 9, "type": "NATIVE_FILTER"}, True, 7),
+            ({"dashboardId": 9}, False, 7),
+            ({"dashboardId": 9}, True, 8),
+        ],
+    )
+    @patch("superset.common.query_context_factory.is_feature_enabled")
+    @patch("superset.common.query_context_factory.security_manager")
+    @patch("superset.common.query_context_factory.DashboardDAO")
+    @patch("superset.common.query_context_factory.ChartDAO")
+    def test_get_slice_rejects_untrusted_dashboard_fallback(
+        self,
+        mock_chart_dao,
+        mock_dashboard_dao,
+        mock_security_manager,
+        mock_is_feature_enabled,
+        form_data,
+        dashboard_authorized,
+        chart_datasource_id,
+    ):
+        """Native filters, denied dashboards, and other datasets cannot lend config."""
+        mock_chart_dao.find_by_id.return_value = None
+        mock_security_manager.is_guest_user = Mock(return_value=True)
+        mock_security_manager.can_access_dashboard = Mock(
+            return_value=dashboard_authorized
+        )
+        mock_is_feature_enabled.return_value = False
+        mock_dashboard_dao.find_by_id.return_value = Mock(
+            slices=[Mock(spec=Slice, id=123, datasource_id=chart_datasource_id)]
+        )
+
+        result = self.factory._get_slice(123, form_data, Mock(id=7))
+
+        assert result is None
+        if form_data.get("type") == "NATIVE_FILTER":
+            mock_dashboard_dao.find_by_id.assert_not_called()
 
     def test_apply_granularity_with_x_axis(self):
         """Test _apply_granularity with x_axis in form_data"""

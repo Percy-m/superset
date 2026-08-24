@@ -22,6 +22,7 @@ from marshmallow import ValidationError
 from superset.charts.schemas import (
     ChartDataProphetOptionsSchema,
     ChartDataQueryObjectSchema,
+    ChartDataResultFormatOptionsSchema,
     get_time_grain_choices,
 )
 
@@ -159,6 +160,13 @@ def test_chart_data_query_object_schema_validates_table_alert_references(
 
     with pytest.raises(ValidationError):
         schema.load({"alert_filters": [{"rule_id": "not-a-uuid", "level": "PURPLE"}]})
+
+
+def test_chart_data_result_format_options_schema() -> None:
+    """Styled XLSX can explicitly project a multi-query response to query one."""
+    assert ChartDataResultFormatOptionsSchema().load(
+        {"styled": True, "xlsx_primary_query_only": True}
+    ) == {"styled": True, "xlsx_primary_query_only": True}
 
 
 def test_chart_data_query_object_schema_limits_table_alert_references(

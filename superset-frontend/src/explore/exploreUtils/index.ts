@@ -348,7 +348,10 @@ export const buildV1ChartDataPayload = async ({
     formData.slice_id &&
     isFeatureEnabled(FeatureFlag.StyledXlsxExport)
   ) {
-    queryContext.result_format_options = { styled: true };
+    queryContext.result_format_options = {
+      styled: true,
+      xlsx_primary_query_only: true,
+    };
   }
   return queryContext;
 };

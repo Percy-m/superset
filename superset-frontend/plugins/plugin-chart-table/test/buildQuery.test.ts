@@ -337,6 +337,49 @@ test('alert selections are attached to data and qualified totals queries', () =>
   }
 });
 
+test('xlsx downloads retain the internal alert totals query', () => {
+  const previousFlags = window.featureFlags;
+  window.featureFlags = {
+    [FeatureFlag.TableAlertFilters]: true,
+    [FeatureFlag.StyledXlsxExport]: true,
+  };
+  try {
+    const { queries } = buildQuery(
+      {
+        ...basicFormData,
+        slice_id: 42,
+        query_mode: QueryMode.Aggregate,
+        groupby: ['category'],
+        metrics: ['gross_revenue'],
+        show_totals: true,
+        result_format: 'xlsx',
+        row_limit: 10000,
+      },
+      {
+        ownState: {
+          alertFilters: [
+            {
+              ruleId: '772a548e-72f7-4ac8-a8ff-fdb7465b3ccd',
+              level: 'RED',
+            },
+          ],
+        },
+      },
+    );
+
+    expect(queries).toHaveLength(2);
+    expect(queries[0]).toMatchObject({ row_limit: 10000, row_offset: 0 });
+    expect(queries[1]).toMatchObject({
+      alert_filters: queries[0].alert_filters,
+      is_table_alert_totals: true,
+      row_limit: 0,
+      row_offset: 0,
+    });
+  } finally {
+    window.featureFlags = previousFlags;
+  }
+});
+
 test('alert selections are omitted when the feature flag is disabled', () => {
   const previousFlags = window.featureFlags;
   window.featureFlags = { [FeatureFlag.TableAlertFilters]: false };

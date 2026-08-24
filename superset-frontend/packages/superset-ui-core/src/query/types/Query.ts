@@ -181,8 +181,9 @@ export interface QueryContext {
   result_type: string;
   /** Response format */
   result_format: string;
-  /** Optional server-owned controls for the requested result representation. */
+  /** Optional controls for the requested result representation. */
   result_format_options?: {
+    xlsx_primary_query_only?: boolean;
     styled?: boolean;
   };
   queries: QueryObject[];

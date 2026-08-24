@@ -27,6 +27,11 @@ from marshmallow.validate import Length, Range
 from marshmallow_union import Union
 
 from superset.common.chart_data import ChartDataResultFormat, ChartDataResultType
+from superset.common.table_alerts import (
+    ALERT_FILTER_FINGERPRINT_EXTRA_KEY,
+    ALERT_FILTERS_EXTRA_KEY,
+    ALERT_TOTALS_EXTRA_KEY,
+)
 from superset.db_engine_specs.base import builtin_time_grains
 from superset.tags.models import TagType
 from superset.utils import pandas_postprocessing, schema as utils
@@ -977,6 +982,25 @@ class ChartDataFilterSchema(Schema):
 
 
 class ChartDataExtrasSchema(Schema):
+    # These cache-only values are accepted so a server-generated async QueryContext
+    # can be rehydrated. QueryContextFactory always removes them before resolving
+    # client alert references against the saved Slice.
+    _table_alert_filter_groups = fields.Raw(
+        attribute=ALERT_FILTERS_EXTRA_KEY,
+        data_key=ALERT_FILTERS_EXTRA_KEY,
+        load_only=True,
+    )
+    _table_alert_filter_fingerprint = fields.Raw(
+        attribute=ALERT_FILTER_FINGERPRINT_EXTRA_KEY,
+        data_key=ALERT_FILTER_FINGERPRINT_EXTRA_KEY,
+        load_only=True,
+    )
+    _table_alert_totals = fields.Raw(
+        attribute=ALERT_TOTALS_EXTRA_KEY,
+        data_key=ALERT_TOTALS_EXTRA_KEY,
+        load_only=True,
+    )
+
     relative_start = fields.String(
         metadata={
             "description": "Start time for relative time deltas. "
@@ -1421,6 +1445,7 @@ class ChartDataResultFormatOptionsSchema(Schema):
     """Optional controls for a requested result representation."""
 
     styled = fields.Boolean(load_default=False)
+    xlsx_primary_query_only = fields.Boolean(load_default=False)
 
 
 class ChartDataQueryContextSchema(Schema):

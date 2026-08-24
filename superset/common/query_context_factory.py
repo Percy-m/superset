@@ -20,7 +20,7 @@ from typing import Any, cast, TYPE_CHECKING
 
 from flask import current_app
 
-from superset import is_feature_enabled
+from superset import is_feature_enabled, security_manager
 from superset.common.chart_data import ChartDataResultFormat, ChartDataResultType
 from superset.common.query_context import QueryContext
 from superset.common.query_object import QueryObject
@@ -34,6 +34,7 @@ from superset.common.table_alerts import (
     TableRuleResolver,
 )
 from superset.daos.chart import ChartDAO
+from superset.daos.dashboard import DashboardDAO
 from superset.daos.datasource import DatasourceDAO
 from superset.exceptions import QueryObjectValidationError
 from superset.explorables.base import Explorable
@@ -76,23 +77,33 @@ class QueryContextFactory:  # pylint: disable=too-few-public-methods
         if isinstance(current_slice, Slice):
             slice_ = current_slice
         elif form_data and form_data.get("slice_id") is not None:
-            slice_ = self._get_slice(form_data.get("slice_id"))
+            slice_ = self._get_slice(
+                form_data.get("slice_id"),
+                form_data,
+                datasource_model_instance,
+            )
 
         result_type = result_type or ChartDataResultType.FULL
         result_format = result_format or ChartDataResultFormat.JSON
         result_format_options = result_format_options or {}
 
-        if (
+        styled_xlsx_requested = (
             is_feature_enabled("STYLED_XLSX_EXPORT")
             and result_format_options.get("styled") is True
-            and (
-                result_format != ChartDataResultFormat.XLSX
-                or not isinstance(slice_, Slice)
-                or slice_.viz_type != "table"
-                or slice_.datasource_type != "table"
-                or datasource_model_instance is None
-                or slice_.datasource_id != datasource_model_instance.id
-            )
+        )
+        valid_styled_xlsx = styled_xlsx_requested and (
+            result_format == ChartDataResultFormat.XLSX
+            and isinstance(slice_, Slice)
+            and slice_.viz_type == "table"
+            and slice_.datasource_type == "table"
+            and datasource_model_instance is not None
+            and slice_.datasource_id == datasource_model_instance.id
+        )
+        if styled_xlsx_requested and not valid_styled_xlsx:
+            raise QueryObjectValidationError(STYLED_XLSX_UNSUPPORTED_MESSAGE)
+        if (
+            result_format_options.get("xlsx_primary_query_only") is True
+            and not valid_styled_xlsx
         ):
             raise QueryObjectValidationError(STYLED_XLSX_UNSUPPORTED_MESSAGE)
 
@@ -122,7 +133,14 @@ class QueryContextFactory:  # pylint: disable=too-few-public-methods
         ]
         cache_values = {
             "datasource": datasource,
-            "queries": resolved_queries,
+            "queries": [
+                self._query_for_cache(query, resolved_query)
+                for query, resolved_query in zip(
+                    queries,
+                    resolved_queries,
+                    strict=True,
+                )
+            ],
             "result_type": result_type,
             "result_format": result_format,
             "result_format_options": result_format_options,
@@ -150,6 +168,18 @@ class QueryContextFactory:  # pylint: disable=too-few-public-methods
         resolved_query = dict(query)
         references = resolved_query.pop("alert_filters", None)
         wants_totals = resolved_query.pop("is_table_alert_totals", False)
+        had_extras = "extras" in resolved_query
+        extras = dict(resolved_query.get("extras") or {})
+        for internal_key in (
+            ALERT_FILTERS_EXTRA_KEY,
+            ALERT_FILTER_FINGERPRINT_EXTRA_KEY,
+            ALERT_TOTALS_EXTRA_KEY,
+        ):
+            extras.pop(internal_key, None)
+        if extras or had_extras:
+            resolved_query["extras"] = extras
+        else:
+            resolved_query.pop("extras", None)
         if not is_feature_enabled("TABLE_ALERT_FILTERS") or not references:
             return resolved_query
         if (
@@ -176,14 +206,78 @@ class QueryContextFactory:  # pylint: disable=too-few-public-methods
         canonical_query["extras"] = extras
         return canonical_query
 
+    @staticmethod
+    def _query_for_cache(
+        query: dict[str, Any],
+        resolved_query: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Keep canonical alert references so async cache reads can revalidate them."""
+        cache_query = dict(resolved_query)
+        extras = resolved_query.get("extras") or {}
+        if ALERT_FILTERS_EXTRA_KEY not in extras:
+            return cache_query
+
+        references = {
+            (str(reference["rule_id"]), reference["level"]): {
+                "rule_id": str(reference["rule_id"]),
+                "level": reference["level"],
+            }
+            for reference in query.get("alert_filters") or []
+        }
+        cache_query["alert_filters"] = [references[key] for key in sorted(references)]
+        if query.get("is_table_alert_totals") is True:
+            cache_query["is_table_alert_totals"] = True
+        return cache_query
+
     def _convert_to_model(self, datasource: DatasourceDict) -> Explorable:
         return DatasourceDAO.get_datasource(
             datasource_type=DatasourceType(datasource["type"]),
             database_id_or_uuid=datasource["id"],
         )
 
-    def _get_slice(self, slice_id: Any) -> Slice | None:
-        return ChartDAO.find_by_id(slice_id)
+    def _get_slice(
+        self,
+        slice_id: Any,
+        form_data: dict[str, Any],
+        datasource: Explorable | None,
+    ) -> Slice | None:
+        if (chart := ChartDAO.find_by_id(slice_id)) is not None:
+            return chart
+
+        # ChartFilter only recognizes direct datasource grants. Embedded guests and
+        # Dashboard RBAC users may instead receive access through a Dashboard, so
+        # fall back only to a chart inside an already authorized Dashboard. Native
+        # Filter QueryContexts cannot use this path to borrow unrelated chart config.
+        is_guest_user = security_manager.is_guest_user()
+        dashboard_rbac_enabled = is_feature_enabled("DASHBOARD_RBAC")
+        if (
+            form_data.get("type") == "NATIVE_FILTER"
+            or form_data.get("dashboardId") is None
+            or datasource is None
+            or not (is_guest_user or dashboard_rbac_enabled)
+        ):
+            return None
+
+        dashboard = DashboardDAO.find_by_id(
+            form_data["dashboardId"],
+            skip_base_filter=True,
+        )
+        if (
+            dashboard is None
+            or (not is_guest_user and not dashboard.roles)
+            or not security_manager.can_access_dashboard(dashboard)
+        ):
+            return None
+
+        return next(
+            (
+                dashboard_chart
+                for dashboard_chart in dashboard.slices
+                if str(dashboard_chart.id) == str(slice_id)
+                and dashboard_chart.datasource_id == datasource.id
+            ),
+            None,
+        )
 
     def _process_query_object(
         self,

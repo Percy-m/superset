@@ -419,8 +419,24 @@ class ChartDataRestApi(ChartRestApi):
                     result, form_data, filename=filename, expected_rows=expected_rows
                 )
 
-            if len(result["queries"]) == 1:
-                # return single query results
+            is_styled_xlsx = (
+                result_format == ChartDataResultFormat.XLSX
+                and is_feature_enabled("STYLED_XLSX_EXPORT")
+                and result["query_context"].result_format_options.get("styled") is True
+            )
+            xlsx_primary_query_only = (
+                result["query_context"].result_format_options.get(
+                    "xlsx_primary_query_only"
+                )
+                is True
+            )
+
+            if len(result["queries"]) == 1 or (
+                is_styled_xlsx and xlsx_primary_query_only
+            ):
+                # Styled Table exports are one workbook even when buildQuery adds
+                # totals or contribution queries. The explicit response option makes
+                # returning only the primary query part of the request contract.
                 data = result["queries"][0]["data"]
                 if is_csv_format:
                     return CsvResponse(data, headers=generate_download_headers("csv"))
