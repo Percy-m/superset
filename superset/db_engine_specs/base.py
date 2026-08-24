@@ -2190,6 +2190,18 @@ class BaseEngineSpec:  # pylint: disable=too-many-public-methods
             return sqla_type, generic_type
         return None
 
+    @classmethod
+    def is_column_type_scalar(  # pylint: disable=unused-argument
+        cls, native_type: str | None
+    ) -> bool:
+        """Return whether a native column type represents a scalar value.
+
+        Engine specs can override this when a complex native type is mapped to a
+        scalar ``GenericDataType`` for display or serialization compatibility.
+        The default preserves the existing behavior for all engines.
+        """
+        return True
+
     @staticmethod
     def _mutate_label(label: str) -> str:
         """

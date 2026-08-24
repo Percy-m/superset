@@ -19,21 +19,21 @@ under the License.
 
 # Superset 数据质量 BI 增强实施计划
 
-| 属性         | 值                                                                                                          |
-| ------------ | ----------------------------------------------------------------------------------------------------------- |
-| 文档版本     | V1.8                                                                                                        |
-| 文档状态     | Implemented（验收持续补充）                                                                                 |
-| 日期         | 2026-08-24                                                                                                  |
-| 需求输入     | 数据质量 BI 增强需求 V1.4                                                                                   |
-| 详细设计     | [数据质量 BI 增强详细设计](./superset-data-quality-bi-detailed-design.md) V1.7                              |
-| 补充设计     | [ClickHouse 21.3 兼容与 Drill Detail 表格对齐](./superset-clickhouse-21-3-drill-detail-alignment-design.md) |
-| 原始实现基线 | `dev/6.1`，`c83fb2bb1dcf`（Superset 6.1.0 RC3）                                                             |
-| 增量审计基线 | `dev/6.1`，`5f4c1760262a`                                                                                   |
-| 补漏前基线   | `dev/6.1`，`4b2b732ecf`                                                                                     |
-| 补漏提交     | FR5-05 DatasourceEditor 补漏为本文所在 commit；执行与证据见独立验证计划                                     |
-| 数据库基线   | ClickHouse `21.3.20.1`                                                                                      |
-| 文档目标     | 规定 FR-01～FR-05 的严格实施顺序、代码内容和逐项验收门禁                                                    |
-| 功能代码状态 | FR-01～FR-05 已提交；DatasourceEditor 补漏、上下文恢复、执行日志与 ClickHouse Code 36 脱敏已补齐            |
+| 属性         | 值                                                                                                                 |
+| ------------ | ------------------------------------------------------------------------------------------------------------------ |
+| 文档版本     | V1.10                                                                                                              |
+| 文档状态     | Implemented（验收持续补充）                                                                                        |
+| 日期         | 2026-08-24                                                                                                         |
+| 需求输入     | 数据质量 BI 增强需求 V1.4                                                                                          |
+| 详细设计     | [数据质量 BI 增强详细设计](./superset-data-quality-bi-detailed-design.md) V1.9                                     |
+| 补充设计     | [ClickHouse 21.3 兼容与 Drill Detail 表格对齐](./superset-clickhouse-21-3-drill-detail-alignment-design.md) V1.5   |
+| 原始实现基线 | `dev/6.1`，`c83fb2bb1dcf`（Superset 6.1.0 RC3）                                                                    |
+| 增量审计基线 | `dev/6.1`，`5f4c1760262a`                                                                                          |
+| 补漏前基线   | `dev/6.1`，`4b2b732ecf`                                                                                            |
+| 补漏提交     | FR5-05 DatasourceEditor：`a370543223`；CH-14/FR1-FIX-01：本文所在 commit；证据见独立验证计划                       |
+| 数据库基线   | ClickHouse `21.3.20.1`                                                                                             |
+| 文档目标     | 规定 FR-01～FR-05 的严格实施顺序、代码内容和逐项验收门禁                                                           |
+| 功能代码状态 | FR-01～FR-05 已提交；DatasourceEditor、ClickHouse Code 36、Guest XLSX 上下文及 FR-01 ClickHouse 复杂类型补漏已实现 |
 
 补漏实现和发布验证债务的严格执行顺序、环境转换与证据记录归档在
 [数据质量 BI 增强补漏与验证执行计划](./superset-data-quality-bi-validation-execution-plan.md)。
@@ -198,6 +198,7 @@ FR-02 的告警规则、FR-03 的 Permalink、FR-04 的 XLSX 和 FR-05 的导航
 | Schema     | `superset/views/datasource/schemas.py`                                  | `detail_mode` 和嵌套 `search` 校验       |
 | View       | `superset/views/datasource/views.py`                                    | 向 `get_samples` 传递新参数              |
 | 查询       | `superset/views/datasource/utils.py`                                    | legacy/server/bounded_client 三分支      |
+| 引擎能力   | `superset/db_engine_specs/base.py`、`clickhouse.py`                     | 默认标量能力与 ClickHouse 原始类型否决   |
 | 后端测试   | `tests/integration_tests/datasource/`、相关 unit test                   | 协议、权限、排序和容量边界               |
 | 前端测试   | `DrillDetailPane.test.tsx`、`chartAction` 测试、Table controlPanel 测试 | 控件、请求和交互状态                     |
 
@@ -227,9 +228,11 @@ FR-02 的告警规则、FR-03 的 Permalink、FR-04 的 XLSX 和 FR-05 的导航
 
 1. Marshmallow 校验 mode、page、per-page、search 长度；
 2. 加载 Dataset 并执行现有 Dashboard Guest 访问校验；
-3. 验证搜索列是当前 Dataset 可见的物理文本字段；
+3. 验证搜索列是当前 Dataset 可见的物理文本标量字段；先检查 generic type，再调用 EngineSpec
+   对可信 `TableColumn.type` 做引擎级否决；
 4. 将搜索转换为参数绑定的前缀 `ILIKE` 标准 filter；
-5. 从返回投影中生成确定性物理标量排序；
+5. 从返回投影中生成确定性物理标量排序；ClickHouse Array/Map/Tuple/Nested/Object/JSON/
+   aggregate-state 即使映射为 generic STRING 也必须排除；
 6. `server` 模式执行 count 和当前页查询；
 7. `bounded_client` 模式执行 K+1，不执行独立 count；
 8. 执行 `raise_for_access()` 后读取结果；
@@ -245,9 +248,10 @@ FR-02 的告警规则、FR-03 的 Permalink、FR-04 的 XLSX 和 FR-05 的导航
 | 总载荷     | 8 MiB  | `DRILL_DETAIL_PAYLOAD_LIMIT_EXCEEDED` |
 | 单个单元格 | 1 MiB  | `DRILL_DETAIL_CELL_SIZE_EXCEEDED`     |
 
-完全没有可排序标量字段时返回
+两种 configurable 模式完全没有可排序标量字段时都返回
 `DRILL_DETAIL_STABLE_ORDER_UNAVAILABLE`（422）。ClickHouse Nullable 排序显式生成
-`isNull(column), column`，不依赖 MergeTree 物理顺序。
+`isNull(column), column`，不依赖 MergeTree 物理顺序；bounded client 也保持排序，使 K+1
+容量判定和重复请求可复现。
 
 ### 4.4 请求和查询时序
 
@@ -268,7 +272,7 @@ sequenceDiagram
   View->>Schema: "校验 query args 和 JSON body"
   Schema-->>View: "规范化请求"
   View->>Query: "执行 legacy/server/bounded_client 分支"
-  Query->>Query: "验证物理文本列并构造稳定排序"
+  Query->>Query: "generic allowlist + EngineSpec 原始类型否决"
   Query->>Query: "raise_for_access()"
   Query->>CH: "参数绑定 ILIKE + ORDER BY + LIMIT/OFFSET"
   CH-->>Query: "明细结果"
@@ -312,18 +316,19 @@ stateDiagram-v2
 
 ### 4.6 实施步骤
 
-| 步骤   | 实现内容                                          | 完成证据                             |
-| ------ | ------------------------------------------------- | ------------------------------------ |
-| FR1-01 | 只加入 FR-01 Flag，并补充前后端 Flag 关闭测试     | Flag 默认 false，旧请求不带新字段    |
-| FR1-02 | 增加 Table `form_data` 类型和 Explore 控件        | aggregate Table 显示，其他模式不显示 |
-| FR1-03 | 扩展 `getDatasourceSamples` 类型、参数和兼容调用  | legacy 调用序列化结果不变            |
-| FR1-04 | 扩展 Marshmallow schema 和错误响应                | mode、页长、搜索字段边界测试通过     |
-| FR1-05 | 实现 Server 模式前缀搜索、稳定排序、分页和 count  | ClickHouse 第 1、2、50 页结果稳定    |
-| FR1-06 | 实现 bounded client K+1 与四项服务端容量检查      | 四类边界均拒绝且不静默截断           |
-| FR1-07 | 实现 Drill UI 两种状态机、取消请求和搜索 DOM 控制 | RTL 交互测试通过                     |
-| FR1-08 | 实现前端容量复核、错误展示和本地搜索              | 成功、超限、重试测试通过             |
-| FR1-09 | 完成 Dataset/RLS/Guest 权限集成测试               | 无权请求不能读取 count 或 sample     |
-| FR1-10 | 执行 FR-01 全部回归和 ClickHouse 21.3 验收        | FR-01 门禁签字后才允许开始 FR-02     |
+| 步骤       | 实现内容                                          | 完成证据                                                  |
+| ---------- | ------------------------------------------------- | --------------------------------------------------------- |
+| FR1-01     | 只加入 FR-01 Flag，并补充前后端 Flag 关闭测试     | Flag 默认 false，旧请求不带新字段                         |
+| FR1-02     | 增加 Table `form_data` 类型和 Explore 控件        | aggregate Table 显示，其他模式不显示                      |
+| FR1-03     | 扩展 `getDatasourceSamples` 类型、参数和兼容调用  | legacy 调用序列化结果不变                                 |
+| FR1-04     | 扩展 Marshmallow schema 和错误响应                | mode、页长、搜索字段边界测试通过                          |
+| FR1-05     | 实现 Server 模式前缀搜索、稳定排序、分页和 count  | ClickHouse 第 1、2、50 页结果稳定                         |
+| FR1-06     | 实现 bounded client K+1 与四项服务端容量检查      | 四类边界均拒绝且不静默截断                                |
+| FR1-07     | 实现 Drill UI 两种状态机、取消请求和搜索 DOM 控制 | RTL 交互测试通过                                          |
+| FR1-08     | 实现前端容量复核、错误展示和本地搜索              | 成功、超限、重试测试通过                                  |
+| FR1-09     | 完成 Dataset/RLS/Guest 权限集成测试               | 无权请求不能读取 count 或 sample                          |
+| FR1-10     | 执行 FR-01 全部回归和 ClickHouse 21.3 验收        | FR-01 门禁签字后才允许开始 FR-02                          |
+| FR1-FIX-01 | 修复 Array-only 被 generic STRING 误判为排序列    | `V4-T01B` 通过：双 key、API 早失败、真实 21.3 与 RLS 回归 |
 
 ### 4.7 测试和完成定义
 
@@ -333,6 +338,8 @@ stateDiagram-v2
 - `fact_events` 验证重复排序键和稳定翻页；
 - `drill_wide_flat` 验证 50,000 单元格边界；
 - `export_edge_cases` 验证 8 MiB 和 1 MiB 边界。
+- `drill_wide.metrics Array(Int32)` 验证物理/虚拟 Array-only 在 QueryContext 创建前返回
+  422；`row_id + metrics` 只按标量列翻页，Array structured search 返回 400。
 
 FR-01 完成定义：四个字段可保存和恢复；两种模式均工作；所有容量错误明确；旧 Slice 和
 旧 Samples 请求不变；权限测试通过；Flag 关闭回归通过；FR-01 无阻塞缺陷。
@@ -751,20 +758,20 @@ Workbook 写入要求：
 
 ### 7.7 实施步骤
 
-| 步骤   | 实现内容                                               | 完成证据                             |
-| ------ | ------------------------------------------------------ | ------------------------------------ |
-| FR4-01 | 加入两个 FR-04 Flag、依赖校验和关闭态回归              | Tab Flag 不可脱离 Styled Flag 生效   |
-| FR4-02 | 扩展 Chart Data 顶层 schema 和单 Table styled 分支     | 旧 XLSX 字节语义不受请求缺省影响     |
-| FR4-03 | 扩展 FR-02 resolver 的样式求值，不改变过滤语义         | 前后端边界 fixtures 一致             |
-| FR4-04 | 实现安全单 Sheet writer                                | 公式、长整数、控制字符和样式测试通过 |
-| FR4-05 | 增加 Dashboard API schema、权限装饰器和错误映射        | 400/403/404/422 契约通过             |
-| FR4-06 | 实现 position_json Tab 验证、DFS、去重和 10 Table 上限 | 嵌套 Tab 和重复 Slice 顺序稳定       |
-| FR4-07 | 实现服务端 Dashboard Native/Cross/alert 状态解析       | 与 FR-03 JSON fixtures 契约一致      |
-| FR4-08 | 实现逐 Table QueryContext、可信 Dashboard context、Chart/Dataset/DB/RLS 校验 | 任一无权时整体失败；伪造 ID 无效 |
-| FR4-09 | 实现 constant-memory 多 Sheet writer 和 `_导出说明`    | 串行执行，单表结果及时释放           |
-| FR4-10 | 实现临时文件生命周期和响应完成后的清理                 | 查询、close、客户端断开路径无残留    |
-| FR4-11 | 实现 Dashboard Tab 选择菜单、下载和通用错误反馈        | UI 不暴露 SQL、筛选值或数据库详情    |
-| FR4-12 | 完成 ClickHouse 类型、内存、原子失败和权限回归         | FR-04 门禁签字后才允许开始 FR-05     |
+| 步骤   | 实现内容                                                                     | 完成证据                             |
+| ------ | ---------------------------------------------------------------------------- | ------------------------------------ |
+| FR4-01 | 加入两个 FR-04 Flag、依赖校验和关闭态回归                                    | Tab Flag 不可脱离 Styled Flag 生效   |
+| FR4-02 | 扩展 Chart Data 顶层 schema 和单 Table styled 分支                           | 旧 XLSX 字节语义不受请求缺省影响     |
+| FR4-03 | 扩展 FR-02 resolver 的样式求值，不改变过滤语义                               | 前后端边界 fixtures 一致             |
+| FR4-04 | 实现安全单 Sheet writer                                                      | 公式、长整数、控制字符和样式测试通过 |
+| FR4-05 | 增加 Dashboard API schema、权限装饰器和错误映射                              | 400/403/404/422 契约通过             |
+| FR4-06 | 实现 position_json Tab 验证、DFS、去重和 10 Table 上限                       | 嵌套 Tab 和重复 Slice 顺序稳定       |
+| FR4-07 | 实现服务端 Dashboard Native/Cross/alert 状态解析                             | 与 FR-03 JSON fixtures 契约一致      |
+| FR4-08 | 实现逐 Table QueryContext、可信 Dashboard context、Chart/Dataset/DB/RLS 校验 | 任一无权时整体失败；伪造 ID 无效     |
+| FR4-09 | 实现 constant-memory 多 Sheet writer 和 `_导出说明`                          | 串行执行，单表结果及时释放           |
+| FR4-10 | 实现临时文件生命周期和响应完成后的清理                                       | 查询、close、客户端断开路径无残留    |
+| FR4-11 | 实现 Dashboard Tab 选择菜单、下载和通用错误反馈                              | UI 不暴露 SQL、筛选值或数据库详情    |
+| FR4-12 | 完成 ClickHouse 类型、内存、原子失败和权限回归                               | FR-04 门禁签字后才允许开始 FR-05     |
 
 ### 7.8 测试和完成定义
 
@@ -1024,13 +1031,13 @@ fixture，不得继续 UI/API 测试。
 
 ## 12. 预计文件变更索引
 
-| FR    | 后端主要范围                                                                                    | 前端主要范围                                                                                  |
-| ----- | ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| FR-01 | `superset/views/datasource/{schemas,views,utils}.py`                                            | Table `types/controlPanel`、`DrillDetailPane`、`chartAction`                                  |
-| FR-02 | `superset/charts/schemas.py`、`superset/common/table_alerts.py`、查询构建和缓存相关模块         | chart-controls 类型、ConditionalFormattingControl、TableChart、buildQuery                     |
-| FR-03 | 现有 Permalink API 仅做兼容验证，原则上不新增后端解析模块                                       | Dashboard sanitizer、share menu、DashboardPage、hydrate action、dataMask reducer              |
-| FR-04 | Chart Data schema/processor、Dashboard API/schema/command、`styled_excel.py`、扩展 table_alerts | Dashboard export menu、下载请求和错误反馈                                                     |
-| FR-05 | SQL Lab view 仅增加协议回归测试，原则上不新增 endpoint                                          | `SqlLab/utils/openSqlLabQuery.ts`、ViewQuery、ViewQueryModalFooter、其他携带 SQL 的新窗口入口 |
+| FR    | 后端主要范围                                                                                          | 前端主要范围                                                                                  |
+| ----- | ----------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| FR-01 | `superset/views/datasource/{schemas,views,utils}.py`、`superset/db_engine_specs/{base,clickhouse}.py` | Table `types/controlPanel`、`DrillDetailPane`、`chartAction`                                  |
+| FR-02 | `superset/charts/schemas.py`、`superset/common/table_alerts.py`、查询构建和缓存相关模块               | chart-controls 类型、ConditionalFormattingControl、TableChart、buildQuery                     |
+| FR-03 | 现有 Permalink API 仅做兼容验证，原则上不新增后端解析模块                                             | Dashboard sanitizer、share menu、DashboardPage、hydrate action、dataMask reducer              |
+| FR-04 | Chart Data schema/processor、Dashboard API/schema/command、`styled_excel.py`、扩展 table_alerts       | Dashboard export menu、下载请求和错误反馈                                                     |
+| FR-05 | SQL Lab view 仅增加协议回归测试，原则上不新增 endpoint                                                | `SqlLab/utils/openSqlLabQuery.ts`、ViewQuery、ViewQueryModalFooter、其他携带 SQL 的新窗口入口 |
 
 实现时如果实际调用链要求增加文件，必须在当前 FR 的变更说明中记录理由；不得借机修改后续 FR
 目录或进行无关重构。
@@ -1038,7 +1045,7 @@ fixture，不得继续 UI/API 测试。
 ## 13. 原始实施门禁模板
 
 以下清单保留原计划的逐 FR 门禁结构，不表示 As-built 功能尚未实现。实际提交、已执行
-验证和待补门禁分别以本文元数据、详细设计追踪矩阵及补充设计第 7 节为准。
+验证和待补门禁分别以本文元数据、详细设计追踪矩阵及补充设计第 8、9 节为准。
 
 ### FR-01 完成后
 

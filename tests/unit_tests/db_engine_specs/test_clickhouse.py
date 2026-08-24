@@ -138,6 +138,51 @@ def test_date_trunc_phrase_in_sql_does_not_reclassify_error(engine: str) -> None
     assert spec.extract_error_message(error) == f"{engine} error: {error}"
 
 
+@pytest.mark.parametrize("engine", ["clickhouse", "clickhousedb"])
+@pytest.mark.parametrize(
+    "native_type,expected",
+    [
+        ("Array(UInt8)", False),
+        ("Nullable(Array(String))", False),
+        ("LowCardinality(Array(String))", False),
+        ("Array(Tuple(UInt64, String))", False),
+        ("Map(String, UInt64)", False),
+        ("Tuple(UInt64, String)", False),
+        ("Nested(name String, value UInt64)", False),
+        ("Object('json')", False),
+        ("JSON", False),
+        ("Nullable(JSON)", False),
+        ("AggregateFunction(sum, UInt64)", False),
+        ("String", True),
+        ("LowCardinality(Nullable(String))", True),
+        ("FixedString(16)", True),
+        ("Enum8('ready' = 1)", True),
+        ("UUID", True),
+        ("UInt64", True),
+        ("Decimal(18, 2)", True),
+        ("DateTime", True),
+        ("SimpleAggregateFunction(sum, UInt64)", True),
+        (None, True),
+    ],
+)
+def test_clickhouse_column_type_scalar_policy(
+    engine: str,
+    native_type: str | None,
+    expected: bool,
+) -> None:
+    """Both ClickHouse drivers reject complex native types as scalar keys."""
+    from superset.db_engine_specs.clickhouse import (
+        ClickHouseConnectEngineSpec,
+        ClickHouseEngineSpec,
+    )
+
+    spec = (
+        ClickHouseEngineSpec if engine == "clickhouse" else ClickHouseConnectEngineSpec
+    )
+
+    assert spec.is_column_type_scalar(native_type) is expected
+
+
 @pytest.mark.parametrize(
     "target_type,expected_result",
     [

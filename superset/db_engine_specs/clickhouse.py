@@ -55,6 +55,12 @@ logger = logging.getLogger(__name__)
 class ClickHouseBaseEngineSpec(BaseEngineSpec):
     """Shared engine spec for ClickHouse."""
 
+    _non_scalar_column_type = re.compile(
+        r"(?:^|[\s,(])"
+        r"(?:Array|Map|Tuple|Nested|Object|JSON|AggregateFunction)"
+        r"(?=\s*(?:[(),]|$))",
+        re.IGNORECASE,
+    )
     _date_trunc_datepart_error_code = re.compile(r"\bcode\s*:\s*36\b", re.IGNORECASE)
     _date_trunc_datepart_error_detail = re.compile(
         r"doesn(?:'|’)?t look like datepart name in date[_ ]?trunc",
@@ -128,6 +134,13 @@ class ClickHouseBaseEngineSpec(BaseEngineSpec):
             GenericDataType.TEMPORAL,
         ),
     )
+
+    @classmethod
+    def is_column_type_scalar(cls, native_type: str | None) -> bool:
+        """Reject ClickHouse collection and aggregate-state column types."""
+        return (
+            not native_type or cls._non_scalar_column_type.search(native_type) is None
+        )
 
     @classmethod
     def epoch_to_dttm(cls) -> str:

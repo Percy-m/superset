@@ -37,7 +37,11 @@ from superset.daos.exceptions import DatasourceNotFound, DatasourceTypeNotSuppor
 from superset.exceptions import SupersetGenericDBErrorException
 from superset.models.core import Database
 from superset.utils import json
-from superset.utils.core import backend, get_example_default_schema  # noqa: F401
+from superset.utils.core import (  # noqa: F401
+    backend,
+    GenericDataType,
+    get_example_default_schema,
+)
 from superset.utils.database import (  # noqa: F401
     get_example_database,
     get_main_database,
@@ -940,3 +944,44 @@ def test_configurable_drill_detail_rejects_numeric_search_column(
 
     assert response.status_code == 400
     assert response.json["error_code"] == "DRILL_DETAIL_INVALID_SEARCH_COLUMN"
+
+
+@with_feature_flags(DRILL_DETAIL_CONFIGURABLE_TABLE=True)
+def test_configurable_drill_detail_rejects_clickhouse_array_before_query(
+    test_client, login_as_admin
+):
+    """Array-only ClickHouse datasets fail before page or count queries exist."""
+    from superset.db_engine_specs.clickhouse import ClickHouseConnectEngineSpec
+
+    column = mock.MagicMock()
+    column.column_name = "metrics"
+    column.expression = None
+    column.filterable = True
+    column.is_active = True
+    column.type = "Array(Int32)"
+    column.type_generic = GenericDataType.STRING
+
+    datasource = mock.MagicMock()
+    datasource.id = 999
+    datasource.type = "table"
+    datasource.columns = [column]
+    datasource.db_engine_spec = ClickHouseConnectEngineSpec
+
+    uri = (
+        "/datasource/samples?datasource_id=999"
+        "&datasource_type=table&detail_mode=server&per_page=50"
+    )
+    with (
+        mock.patch(
+            "superset.views.datasource.utils.DatasourceDAO.get_datasource",
+            return_value=datasource,
+        ),
+        mock.patch(
+            "superset.views.datasource.utils.QueryContextFactory"
+        ) as query_context_factory,
+    ):
+        response = test_client.post(uri, json={})
+
+    assert response.status_code == 422
+    assert response.json["error_code"] == "DRILL_DETAIL_STABLE_ORDER_UNAVAILABLE"
+    query_context_factory.assert_not_called()

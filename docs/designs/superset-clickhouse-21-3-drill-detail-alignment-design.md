@@ -21,32 +21,33 @@ under the License.
 
 | 属性          | 值                                                                                                                       |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| 文档版本      | V1.3                                                                                                                     |
-| 文档状态      | Implemented（发布前补充门禁见第 7 节）                                                                                   |
+| 文档版本      | V1.5                                                                                                                     |
+| 文档状态      | Implemented（发布前补充门禁见第 8、9 节）                                                                                |
 | 日期          | 2026-08-24                                                                                                               |
 | 原始需求基线  | 数据质量 BI 增强需求 V1.4                                                                                                |
 | 原始代码基线  | `c83fb2bb1dcf`（Superset 6.1.0 RC3）                                                                                     |
 | 增量审计基线  | `dev/6.1`，`5f4c1760262a`                                                                                                |
-| As-built 基线 | `dev/6.1`，`c18ed1fd02`                                                                                                  |
+| As-built 基线 | `dev/6.1`，本文所在 commit（CH-14）；`c18ed1fd02`（CH-13/UI-DTD-01）                                                     |
 | 依赖基线      | SQLGlot `28.10.0`、Ant Design `5.27.6`、react-window `1.8.11`                                                            |
 | 数据库基线    | 本机 ClickHouse `21.3.20.1`，数据库 `superset_quality_21_3`                                                              |
 | 关联文档      | [详细设计](./superset-data-quality-bi-detailed-design.md)、[实施计划](./superset-data-quality-bi-implementation-plan.md) |
-| 文档目标      | 确认两项待改进问题的实现方案、影响范围、测试门禁、发布与回滚边界                                                         |
+| 文档目标      | 确认三项待改进问题的实现方案、影响范围、测试门禁、发布与回滚边界                                                         |
 
 ## 1. 结论摘要
 
 FR-01～FR-05 已分别落在独立提交中。本补充设计不重新打开原需求，也不新增 FR-06；
-两项改进作为实现后发现的兼容性修正和 UI 缺陷修正单独追踪：
+三项改进作为实现后发现的兼容性修正和 UI 缺陷修正单独追踪：
 
-| ID          | 待改进项                                                  | 已确认方案                                                                        | 是否新增 Flag |
-| ----------- | --------------------------------------------------------- | --------------------------------------------------------------------------------- | ------------- |
-| `CH-13`     | Superset 重生成的时间粒度 SQL 无法在 ClickHouse 21.3 执行 | 自有 ClickHouse dialect 生成小写静态单位；Code 36 映射为无 SQL/服务详情的固定错误 | 否            |
-| `UI-DTD-01` | Drill to Detail 表头、正文滚动宽度和单元格间距不一致      | 由 core `VirtualTable` 计算唯一列布局，同时驱动 AntD header 与 react-window body  | 否            |
+| ID          | 待改进项                                                   | 已确认方案                                                                        | 是否新增 Flag |
+| ----------- | ---------------------------------------------------------- | --------------------------------------------------------------------------------- | ------------- |
+| `CH-13`     | Superset 重生成的时间粒度 SQL 无法在 ClickHouse 21.3 执行  | 自有 ClickHouse dialect 生成小写静态单位；Code 36 映射为无 SQL/服务详情的固定错误 | 否            |
+| `CH-14`     | Array 等复杂列被 generic STRING 误用为 Drill Detail 排序键 | EngineSpec 使用原始类型否决复杂列；无标量时在创建查询前返回既有 422               | 否            |
+| `UI-DTD-01` | Drill to Detail 表头、正文滚动宽度和单元格间距不一致       | 由 core `VirtualTable` 计算唯一列布局，同时驱动 AntD header 与 react-window body  | 否            |
 
-两项修正都不改变 REST API、`form_data`、数据库结构、权限、RLS 或数据结果。原设计建议
-拆为两个独立提交；实施时按本轮明确指令先完成并审查 `CH-13`，再完成并审查
-`UI-DTD-01`，最终合并归档为提交 `c18ed1fd02`。缺陷修正不通过 Feature Flag 保留两套
-长期实现；如需回滚，应整体 revert 该提交，或先拆分补丁后分别回滚。
+三项修正都不改变 REST API、`form_data`、数据库结构、权限、RLS 或正确数据结果。
+`CH-13` 与 `UI-DTD-01` 历史上合并归档为 `c18ed1fd02`；`CH-14` 是 V4-T01 真实矩阵发现的
+独立 FR-01 补漏，必须单独完成审查、commit 和 push。缺陷修正不通过 Feature Flag 保留两套
+长期实现；三者按各自提交独立回滚。
 
 ## 2. 基线与已验证证据
 
@@ -54,17 +55,18 @@ FR-01～FR-05 已分别落在独立提交中。本补充设计不重新打开原
 
 当前 `dev/6.1` 已包含：
 
-| 范围                 | 提交         | 状态                 |
-| -------------------- | ------------ | -------------------- |
-| FR-01                | `de65297208` | 已提交               |
-| FR-02                | `a8b507c29a` | 已提交               |
-| FR-03                | `f02a5937b4` | 已提交               |
-| FR-04                | `8e7dcabcd7` | 已提交               |
-| FR-05                | `5f4c176026` | 已提交               |
-| FR-01 分页可见性修正 | `dee7616f21` | 已提交               |
-| CH-13、UI-DTD-01     | `c18ed1fd02` | 已实现并完成本机验收 |
+| 范围                 | 提交            | 状态                       |
+| -------------------- | --------------- | -------------------------- |
+| FR-01                | `de65297208`    | 已提交                     |
+| FR-02                | `a8b507c29a`    | 已提交                     |
+| FR-03                | `f02a5937b4`    | 已提交                     |
+| FR-04                | `8e7dcabcd7`    | 已提交                     |
+| FR-05                | `5f4c176026`    | 已提交                     |
+| FR-01 分页可见性修正 | `dee7616f21`    | 已提交                     |
+| CH-13、UI-DTD-01     | `c18ed1fd02`    | 已实现并完成本机验收       |
+| CH-14                | 本文所在 commit | 已实现并通过完整 `V4-T01B` |
 
-`CH-13` 和 `UI-DTD-01` 不改变 AC-01～AC-17 的原始含义。本文同时记录原设计约束、
+`CH-13`、`CH-14` 和 `UI-DTD-01` 不改变 AC-01～AC-17 的原始含义。本文同时记录原设计约束、
 实际落地差异和仍待补充的跨平台验收，避免把尚未固化的测试写成已完成自动化。
 
 ### 2.2 ClickHouse 21.3 失败证据
@@ -153,7 +155,16 @@ flowchart LR
   UG -- "否" --> U
   UG -- "是" --> UR["代码审查，冻结 UI-DTD-01 范围"]
   UR --> K["按本轮指令合并提交 c18ed1fd02"]
-  K --> F["全量 pre-commit 与最终归档核对"]
+  K --> H["V4-T01-H：Array-only 真实 21.3 失败"]
+  H --> C14["CH-14：EngineSpec 原始类型标量判定"]
+  C14 --> G14{"定向 Unit/API/真实 H、混合投影与双 connector 反射通过？"}
+  G14 -- "否" --> C14
+  G14 -- "是" --> T01B["从 T01 第一步完整重跑"]
+  T01B --> TG{"完整 T01B、双 connector 与跨库隔离通过？"}
+  TG -- "否" --> C14
+  TG -- "是" --> R14["独立代码与文档审查"]
+  R14 --> F["pre-commit run --all-files"]
+  F --> P14["独立 commit、push 与归档核对"]
 ```
 
 原建议提交标题与实际提交如下：
@@ -161,14 +172,15 @@ flowchart LR
 ```text
 fix(clickhouse): generate legacy-compatible date trunc units
 fix(drill-detail): align virtual table header and body
+fix(clickhouse): reject complex drill-detail ordering
 
 # As-built
 fix: support ClickHouse 21.3 and align drill detail
 ```
 
-实施过程中仍遵循 `CH-13` 先完成方案、测试和审查，再修改 `VirtualTable`；
-`UI-DTD-01` 没有夹带 ClickHouse、FR-01 查询或后端改动。提交合并是版本管理边界偏差，
-不是实现依赖或代码职责的混合。
+历史实施仍遵循 `CH-13` 先完成方案、测试和审查，再修改 `VirtualTable`；`UI-DTD-01`
+没有夹带 ClickHouse、FR-01 查询或后端改动。`CH-14` 在后续 V4-T01 中独立发现和实施，
+不修改 `VirtualTable` 或 SQLGlot dialect。历史合并提交是版本管理边界偏差，不是实现依赖。
 
 ## 4. CH-13：ClickHouse 21.3 时间粒度兼容
 
@@ -393,9 +405,57 @@ Code 36 故障，只能作为明确知情的应急措施。
 本修正无 schema 或数据回滚。缓存不需要清理；回滚前后只会因 canonical SQL 改变出现
 可预期的 cache miss。
 
-## 5. UI-DTD-01：Drill Detail 表头与正文对齐
+## 5. CH-14：ClickHouse 复杂列稳定分页判定
 
-### 5.1 根因
+设计 `CH-14`、实施 `FR1-FIX-01`、验证及提交 `V4-FIX-02` 指向同一项修复。
+
+### 5.1 根因与方案
+
+ClickHouse EngineSpec 为了保持既有展示、序列化和导出能力，把 `Array(...)` 映射为
+`GenericDataType.STRING`。FR-01 原实现仅按 generic type 选择排序与搜索字段，导致只有
+`metrics Array(Int32)` 的虚拟 Dataset 被误判为可排序文本列，真实 Samples 返回 200；正确
+契约是 HTTP 422 `DRILL_DETAIL_STABLE_ORDER_UNAVAILABLE`。
+
+不修改 Array 的 generic 映射，也不在 View 中硬编码 backend 名称。`BaseEngineSpec` 新增
+`is_column_type_scalar(native_type)`，默认返回 `true`；`ClickHouseBaseEngineSpec` 根据持久化
+的 `TableColumn.type` 否决 Array、Map、Tuple、Nested、Object/JSON 和 aggregate-state。
+FR-01 的稳定排序和 structured search 共用该能力。共享 ClickHouse 基类同时覆盖
+`clickhouse`、`clickhousedb`，MySQL/PostgreSQL 继承默认行为，因此没有运行时变更。
+
+```mermaid
+flowchart LR
+  M["TableColumn metadata"] --> G{"generic type 是标量？"}
+  G -- "否" --> E["422 stable order unavailable"]
+  G -- "是" --> S{"EngineSpec 原始类型是标量？"}
+  S -- "否" --> E
+  S -- "是" --> O["加入可信 ORDER BY / Search 候选"]
+  O --> Q["创建 page/count QueryContext"]
+```
+
+### 5.2 影响、测试与回滚
+
+| 范围                                                 | 结果                                                  |
+| ---------------------------------------------------- | ----------------------------------------------------- |
+| ClickHouse 两个 engine key                           | 复杂原始类型不再成为稳定排序或 structured search 候选 |
+| 普通 String/Nullable/LowCardinality/numeric/temporal | 继续进入既有稳定排序，NULL 判别顺序不变               |
+| MySQL/PostgreSQL/其他 EngineSpec                     | Base 默认 `true`，行为与修复前一致                    |
+| legacy Samples、Chart、XLSX、类型展示                | 不调用该 FR-01 能力或保留 generic 映射，行为不变      |
+
+测试必须覆盖两个 ClickHouse key 的复杂/标量类型矩阵、Array-only API 在 QueryContext 前
+精确 422、混合 `row_id + metrics` 只按标量翻页、Array search 精确 400，以及 MySQL/
+PostgreSQL 代表标量回归。真实 ClickHouse 21.3 使用 10k 行 `drill_wide` 同时验证物理与虚拟
+Dataset。该修复不设 Flag；如出现回归，仅 revert CH-14 提交，不需要 schema、数据或缓存
+回滚。
+
+非阻断架构债 `FR1-ORDER-FOLLOWUP-01`：FR-01 只定义所有可信标量字段组成的稳定
+`ORDER BY` 候选序列，并未要求或保存可证明唯一的行身份。若标量组合全部相同而复杂列不同，
+OFFSET 并列顺序仍由数据库决定；并发写入也可能改变页边界。要求唯一证明会使大量虚拟
+Dataset 失效，复杂值字符串/hash tie-breaker 又会引入性能、碰撞和跨库语义风险，因此不并入
+CH-14。后续独立评估 PK/unique 元数据、显式稳定键、EngineSpec 行身份和 keyset pagination。
+
+## 6. UI-DTD-01：Drill Detail 表头与正文对齐
+
+### 6.1 根因
 
 Drill Detail 在 `DrillDetailPane.tsx` 中使用 `TableSize.Small`、`resizable` 和
 `virtualize`。Ant Design `<table>` 渲染 header，react-window `VariableSizeGrid` 渲染
@@ -410,7 +470,7 @@ body，两者必须显式共享几何契约。
 3. AntD Small header 实测水平 padding 为 `8px 8px`，body 为 `8px 4px`；另有一份
    未可靠生效的 `.virtual-table-cell { padding: 16px; }` 重复样式，存在未来覆盖风险。
 
-### 5.2 唯一列布局模型
+### 6.2 唯一列布局模型
 
 在 `VirtualTable` 内建立纯函数 `resolveVirtualColumnLayout()`。输入为 columns、容器宽度
 和默认/最小列宽，返回新的列数组与单一内容宽度，不修改调用方对象。
@@ -441,7 +501,7 @@ Grid estimatedColumnWidth  = contentWidth / columnCount
 浏览器滚动范围始终精确。应使用稳定的 `innerElementType` 把 react-window inner div 的
 `width` 固定为 `contentWidth`，同时传平均估值供内部范围计算使用。
 
-### 5.3 修复后数据流
+### 6.3 修复后数据流
 
 ```mermaid
 flowchart TB
@@ -478,7 +538,7 @@ effect 需要显式调用 reset。不得使用 `contentWidth - tableWidth` 手�
 `scrollLeft`：classic scrollbar 会让实际 `clientWidth` 与布局宽度不同，应由浏览器原生
 滚动边界和 react-window `scrollTo()` 处理合法范围。
 
-### 5.4 单元格盒模型
+### 6.4 单元格盒模型
 
 - 删除或收敛 `StyledVirtualTable` 中重复的 `.virtual-table-cell` padding 声明；
 - body 使用 Ant Design token 和 `padding-inline`，避免写死左右方向；
@@ -503,7 +563,7 @@ Middle 目标盒模型为：
 scrollbar size 处理 header spacer；重复补偿会制造新的末列错位。必须在 Windows/Linux
 classic scrollbar 环境通过浏览器测试验证该假设。
 
-### 5.5 文件与实现内容
+### 6.5 文件与实现内容
 
 | 文件                                                                   | As-built 实现内容                                       |
 | ---------------------------------------------------------------------- | ------------------------------------------------------- |
@@ -518,7 +578,7 @@ classic scrollbar 环境通过浏览器测试验证该假设。
 `drill-to-detail-alignment.spec.ts`，该 Playwright 固化项与 classic scrollbar 场景仍是
 后续增强门禁。
 
-### 5.6 影响与兼容性
+### 6.6 影响与兼容性
 
 仓库检索显示，`virtualize` 的生产调用方只有 Drill Detail；其余命中是 core Table 本身和
 Storybook。core Table 是共享导出组件，因此仍需覆盖第三方调用兼容性。
@@ -537,7 +597,7 @@ Storybook。core Table 是共享导出组件，因此仍需覆盖第三方调用
 关闭 `DRILL_DETAIL_CONFIGURABLE_TABLE` 不是回滚手段，因为旧 Drill Detail 同样使用
 virtualized core Table。
 
-### 5.7 测试矩阵
+### 6.7 测试矩阵
 
 浏览器几何 oracle：对每个可见列读取 header `th` 与第一行 body cell 的
 `getBoundingClientRect()`，要求 `left`、`right`、`width` 差值均不超过 1 CSS px；文字
@@ -564,7 +624,7 @@ JSDOM 不提供可靠布局；RTL 单测只能验证 props、DOM 契约和计算
 通过。Playwright 必须先量测首次 `scrollWidth`，再执行横向滚动，否则会触发剩余列量测并
 掩盖 1150→1350 的现有缺陷。不新增 Cypress 测试。
 
-### 5.8 性能、可访问性与可观测性
+### 6.8 性能、可访问性与可观测性
 
 - 52 × 1000 场景的 DOM cell 数继续受 virtualization 上界约束，不得接近 52,000。
 - ResizeObserver burst 应合并到稳定布局，不新增数据请求、listener 泄漏或长循环。
@@ -573,7 +633,7 @@ JSDOM 不提供可靠布局；RTL 单测只能验证 props、DOM 契约和计算
 - table、columnheader、搜索、分页和关闭按钮的 role/name 与 Tab 顺序保持不变。
 - 200% zoom 下由表格自身横向滚动，不允许整个 dialog 横向溢出或裁剪 focus ring。
 
-### 5.9 发布与回滚
+### 6.9 发布与回滚
 
 `UI-DTD-01` 不设 Feature Flag。发布前必须在至少一个 overlay scrollbar 和一个
 占宽 scrollbar 环境完成 Playwright。由于 As-built 与 CH-13 合并在 `c18ed1fd02`，直接
@@ -581,9 +641,9 @@ revert 会同时撤销两项修正；如需仅回滚 UI，应先从该提交拆�
 形成反向补丁。无持久化数据、API 或数据库回滚。回滚后必须记录恢复了已知的首次滚动
 范围和 cell spacing 缺陷。
 
-## 6. 分项实现步骤与完成定义
+## 7. 分项实现步骤与完成定义
 
-### 6.1 CH-13
+### 7.1 CH-13
 
 1. 在锁定 SQLGlot 28.10.0 环境复现大写 unit 的 ClickHouse 21.3 Code 36。
 2. 新增 `SupersetClickHouse` 和两个 engine 映射。
@@ -597,7 +657,7 @@ As-built 状态：实现与本机 connector 验收完成。后续 V3 验证又�
 SQL Lab async/Celery 单、多 statement 运行时验收。仓库内仍未固化 legacy 专用 Celery
 端到端自动化，不能把 active Connect 的异步实测解释为 legacy 异步实测。
 
-### 6.2 UI-DTD-01
+### 7.2 UI-DTD-01
 
 1. 新增纯布局和组件测试，锁定首次 `scrollWidth` 的布局契约。
 2. 实现唯一 resolved layout，删除 `100vw` 宽度来源。
@@ -610,17 +670,35 @@ SQL Lab async/Celery 单、多 statement 运行时验收。仓库内仍未固化
 As-built 状态：macOS overlay scrollbar 下最大几何差值为 `0px`，功能与虚拟化回归通过。
 classic scrollbar、52 列真实浏览器、200% zoom 和 Playwright spec 固化仍是发布前补充项。
 
-## 7. 增量验收追踪
+### 7.3 CH-14
+
+1. 在真实 ClickHouse 21.3 复现 Array-only 虚拟 Dataset 返回 200，并精确删除测试对象。
+2. 在 Base EngineSpec 增加兼容默认，在共享 ClickHouse 基类按原始类型否决复杂列。
+3. 稳定排序和 structured search 共用标量能力；在 QueryContext 创建前返回既有错误码。
+4. 覆盖双 ClickHouse key、Server/bounded、混合投影、Array search 和 MySQL/PostgreSQL。
+5. 重启本机 Flask，先验证真实 H、混合投影和既有标量边界；通过
+   `clickhousedb+connect` 虚拟投影与隔离的 `clickhouse-sqlalchemy` 物理 Dataset 确认
+   `TableColumn.type=Array(...)` 均被保留，并得到相同非标量判定，再从 T01 第一步完整重跑
+   `V4-T01B`。
+6. `V4-T01B` 全部通过后完成独立代码与文档审查，再执行全仓门禁；门禁无修改且返回 0
+   后才允许 commit 和 push。
+
+As-built 状态：代码、unit、API early-fail、真实物理/虚拟 Array-only、混合投影、双
+connector 反射和完整 `V4-T01B` 均通过；`V4-FIX-02` 为 `PASS`。真实测试对象已按精确 ID
+删除并确认 404，隔离 metadata 中的 Database、Dataset、RLS、User 和 Role 清理后均为 0。
+
+## 8. 增量验收追踪
 
 | 验收 ID     | 需求                         | 已完成证据                                                                                                                      | 待补门禁                                        |
 | ----------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
 | `ADD-AC-01` | ClickHouse 21.3 时间粒度兼容 | 两个 engine 映射与七粒度单测；Connect/legacy 真实 21.3；双 key 同步跨层；active Connect async/Celery；MySQL/PostgreSQL/YQL 回归 | legacy 专用 Celery 端到端自动化固化             |
 | `ADD-AC-02` | Drill Detail 对齐            | 纯布局/组件测试；overlay 环境首屏、max、resize 几何差值 `0px`；分页与虚拟化通过                                                 | classic scrollbar、52 列浏览器、Playwright 固化 |
+| `ADD-AC-04` | ClickHouse 复杂列稳定分页    | EngineSpec unit、API early-fail、10k 物理/虚拟 Array-only 与混合投影、双 connector 反射、MySQL/PostgreSQL 隔离                  | —                                               |
 
 原 AC-01～AC-17 不重新编号。“Implemented”表示代码已落地，不等同于上述跨平台发布门禁已经
 全部关闭；待补项完成后才能标记为 Fully Verified。
 
-## 8. 验证命令与交付门禁
+## 9. 验证命令与交付门禁
 
 本次实际执行的最低命令集合：
 
@@ -628,13 +706,31 @@ classic scrollbar、52 列真实浏览器、200% zoom 和 Playwright spec 固化
 # 环境门禁
 venv/bin/python -c "import sqlglot; assert sqlglot.__version__ == '28.10.0'"
 
-# ClickHouse dialect、SQL 格式化与跨库回归：669 + 87 passed
+# ClickHouse dialect、SQL 格式化与跨库回归；不固定沿提交变化的通过计数
 venv/bin/pytest -q tests/unit_tests/sql/dialects/clickhouse_tests.py \
   tests/unit_tests/sql/parse_tests.py \
   tests/unit_tests/sql/transpile_to_dialect_test.py \
-  tests/unit_tests/db_engine_specs/test_clickhouse.py
+  tests/unit_tests/db_engine_specs/test_clickhouse.py \
+  tests/unit_tests/views/datasource/utils_test.py
 venv/bin/pytest -q tests/unit_tests/db_engine_specs/test_mysql.py \
   tests/unit_tests/db_engine_specs/test_postgres.py
+
+# CH-14 API 层必须在 QueryContext 创建前拒绝复杂列
+venv/bin/pytest -q \
+  tests/integration_tests/datasource_tests.py::test_configurable_drill_detail_rejects_clickhouse_array_before_query
+
+# V4-T01B 自动化第 1 阶段：133 + 11 + 12 + 2 = 158 passed
+venv/bin/pytest -p no:cacheprovider -q \
+  tests/unit_tests/db_engine_specs/test_clickhouse.py \
+  tests/unit_tests/views/datasource/utils_test.py
+venv/bin/pytest -p no:cacheprovider -q \
+  tests/integration_tests/datasource_tests.py \
+  -k 'configurable_drill_detail or get_samples_pagination or get_samples_embedded_user'
+venv/bin/pytest -p no:cacheprovider -q \
+  tests/integration_tests/datasets/api_tests.py -k 'get_drill_info'
+venv/bin/pytest -p no:cacheprovider -q \
+  tests/integration_tests/security/row_level_security_tests.py::TestRowLevelSecurity::test_rls_filter_alters_gamma_birth_names_query \
+  tests/integration_tests/security/row_level_security_tests.py::TestRowLevelSecurity::test_get_rls_cache_key
 
 # VirtualTable、core Table 与 Drill Detail：18 passed；全量 TypeScript 通过
 cd superset-frontend
@@ -651,6 +747,19 @@ git diff --check
 ```
 
 此外已通过本机 ClickHouse `21.3.20.1` 的 Connect/legacy 七粒度执行、active Connect
-同步/异步/Celery 链路和 Dashboard Drill Detail DOM 几何量测。待补项仅为仓库内尚未固化的
-legacy 专用 Celery 端到端自动化，以及 UI 的 classic scrollbar、52 列浏览器和 Playwright
-自动化；不以人工量测或其他测试结果替代这些门禁。
+同步/异步/Celery 链路和 Dashboard Drill Detail DOM 几何量测。CH-14 的 `V4-T01B` 证据为：
+
+- 自动化第 1 阶段为 `133 unit + 11 Samples/embedded + 12 drill_info + 2 RLS = 158
+passed`；另行回归 MySQL/PostgreSQL EngineSpec 分别 `45/42 passed`，旧 Samples 七个
+  精确节点在隔离 SQLite 与进程内 SimpleCache 下 `7 passed`；fixture 严格 `26/26 PASS`；
+- Server 第 1/2/50 页分别覆盖 event ID `1..200`、`201..400`、`9801..10000`，Unicode
+  三组前缀各命中 2,500 行；1,000 rows、49,972 cells、8 MiB 和 1 MiB 四项边界均按契约；
+- 物理与虚拟 Array-only 的 Server/bounded 均返回精确 422；混合投影两页无重叠，Array
+  structured search 返回精确 400；
+- Connect `0.15.1` 和 legacy `0.2.9` 均从真实 21.3 反射并持久化 `Array(Int32)`，两个
+  EngineSpec 均判定为非标量；三身份真实 RLS count/data 与无权限 403 门禁通过。
+
+本补充设计范围内其余待补项包括 `FR1-ORDER-FOLLOWUP-01`、仓库内尚未固化的 legacy
+专用 Celery 端到端自动化，以及 UI 的 classic scrollbar、52 列浏览器和 Playwright 自动化；整体 V4～V9 剩余债务以
+[验证执行计划](./superset-data-quality-bi-validation-execution-plan.md) 为准，不以人工量测或
+其他测试结果替代这些门禁。

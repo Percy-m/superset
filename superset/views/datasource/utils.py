@@ -28,6 +28,7 @@ from superset.common.query_context_factory import QueryContextFactory
 from superset.common.utils.query_cache_manager import QueryCacheManager
 from superset.constants import CacheRegion
 from superset.daos.datasource import DatasourceDAO
+from superset.db_engine_specs.base import BaseEngineSpec
 from superset.utils import json
 from superset.utils.core import FilterOperator, GenericDataType, QueryStatus
 
@@ -107,7 +108,10 @@ def _column_attribute(column: Any, attribute: str) -> Any:
     return getattr(column, attribute, None)
 
 
-def _sortable_physical_columns(columns: Iterable[Any]) -> list[str]:
+def _sortable_physical_columns(
+    columns: Iterable[Any],
+    db_engine_spec: type[BaseEngineSpec] = BaseEngineSpec,
+) -> list[str]:
     """Return trusted physical columns that support deterministic ordering."""
     sortable_types = {
         GenericDataType.NUMERIC,
@@ -122,6 +126,7 @@ def _sortable_physical_columns(columns: Iterable[Any]) -> list[str]:
         and not _column_attribute(column, "expression")
         and _column_attribute(column, "is_active") is not False
         and _column_attribute(column, "type_generic") in sortable_types
+        and db_engine_spec.is_column_type_scalar(_column_attribute(column, "type"))
     ]
 
 
@@ -129,6 +134,7 @@ def _prepare_configurable_detail_payload(
     payload: dict[str, Any],
     columns: Iterable[Any],
     detail_mode: DetailMode,
+    db_engine_spec: type[BaseEngineSpec] = BaseEngineSpec,
 ) -> dict[str, Any]:
     """Resolve search and stable ordering from trusted datasource metadata."""
     query_payload = dict(payload)
@@ -139,7 +145,7 @@ def _prepare_configurable_detail_payload(
     }
     search = query_payload.pop("search", None)
     columns = list(columns)
-    sortable_columns = _sortable_physical_columns(columns)
+    sortable_columns = _sortable_physical_columns(columns, db_engine_spec)
     if not sortable_columns:
         raise DatasetSamplesFeatureError(
             "The dataset has no physical column that supports stable ordering.",
@@ -171,6 +177,9 @@ def _prepare_configurable_detail_payload(
             or _column_attribute(search_column, "filterable") is False
             or _column_attribute(search_column, "type_generic")
             != GenericDataType.STRING
+            or not db_engine_spec.is_column_type_scalar(
+                _column_attribute(search_column, "type")
+            )
         ):
             raise DatasetSamplesFeatureError(
                 "The selected search column is not a filterable physical text column.",
@@ -266,7 +275,10 @@ def _get_configurable_drill_samples(  # pylint: disable=too-many-arguments
     """Fetch configurable drill-detail data using server or bounded-client mode."""
     replace_verbose_with_column(payload.get("filters", []), datasource.columns)
     query_payload = _prepare_configurable_detail_payload(
-        payload, datasource.columns, detail_mode
+        payload,
+        datasource.columns,
+        detail_mode,
+        datasource.db_engine_spec,
     )
     limit_clause = (
         {"row_offset": 0, "row_limit": BOUNDED_CLIENT_QUERY_ROWS}

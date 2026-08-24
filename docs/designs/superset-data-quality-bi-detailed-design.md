@@ -21,14 +21,14 @@ under the License.
 
 | 属性          | 值                                                                                                          |
 | ------------- | ----------------------------------------------------------------------------------------------------------- |
-| 文档版本      | V1.7                                                                                                        |
+| 文档版本      | V1.9                                                                                                        |
 | 文档状态      | Implemented（验收持续补充）                                                                                 |
 | 日期          | 2026-08-24                                                                                                  |
 | 输入需求      | 《Superset 6.0 数据质量 BI 增强需求分析与设计文档》V1.4                                                     |
 | 需求来源      | [共享聊天交付件](https://chatgpt.com/share/6a7ec819-69f4-83ec-ad1e-83377e0b86dd)                            |
 | 原始设计基线  | `dev/6.1`，`c83fb2bb1dcf`（Superset 6.1.0 RC3）                                                             |
 | 增量审计基线  | `dev/6.1`，`5f4c1760262a`                                                                                   |
-| As-built 基线 | `dev/6.1`，`ac5b40bb36`                                                                                     |
+| As-built 基线 | `dev/6.1`，本文所在 commit                                                                                  |
 | 补充设计      | [ClickHouse 21.3 兼容与 Drill Detail 表格对齐](./superset-clickhouse-21-3-drill-detail-alignment-design.md) |
 | 目标读者      | 负责该 Superset 分支实现、评审、测试与发布的工程师                                                          |
 
@@ -50,9 +50,10 @@ Sparkline 与多级下钻不在范围内。本文不要求数据库迁移；新�
 Slice `form_data`、Chart Data 请求或 Dashboard Permalink 状态中。所有新能力
 由默认关闭的 Feature Flag 控制。
 
-FR-01～FR-05 提交后的 ClickHouse 21.3 时间粒度兼容和 Drill Detail 虚拟表格对齐
-问题，使用增量 ID `CH-13`、`UI-DTD-01` 单独归档在[补充设计](./superset-clickhouse-21-3-drill-detail-alignment-design.md)，
-不改变本文件的五项 FR 范围或 AC-01～AC-17 含义。
+FR-01～FR-05 提交后的 ClickHouse 21.3 时间粒度兼容、复杂列稳定分页和 Drill Detail
+虚拟表格对齐问题，使用增量 ID `CH-13`、`CH-14`、`UI-DTD-01` 单独归档在
+[补充设计](./superset-clickhouse-21-3-drill-detail-alignment-design.md)，不改变本文件的
+五项 FR 范围或 AC-01～AC-17 含义。
 
 ## 2. 范围、术语与约束
 
@@ -301,16 +302,28 @@ bounded client 模式不执行独立 Count 查询：查询 K+1 行，若取到�
 
 ### 5.3 稳定排序
 
-服务端模式必须在 OFFSET/LIMIT 前建立确定性顺序：
+两种 configurable 模式都必须在创建查询前建立确定性的 `ORDER BY` 候选序列：Server
+mode 用于 OFFSET/LIMIT 稳定翻页；bounded client 用于让 K+1 容量判定和重复请求可复现。
 
 1. 有搜索字段时优先按该字段升序并显式规定 NULL 顺序；
 2. 再按投影中的其余可排序物理字段，以规范列名升序排列；
-3. 完全相同的重复行视觉上不可区分，无需额外伪造主键；
+3. 完全相同的重复行视觉上不可区分，无需额外伪造主键；排序标量组合相同但非排序复杂列
+   不同的行不属于这一假设，见 `FR1-ORDER-FOLLOWUP-01`；
 4. 如果投影中没有任何可排序标量字段，返回
    `DRILL_DETAIL_STABLE_ORDER_UNAVAILABLE`（422），不得执行不稳定分页。
 
-可排序标量限于 string、numeric、temporal 和 boolean。Array、JSON、binary 或引擎声明
-不可排序的类型不进入稳定排序键。
+可排序标量限于 string、numeric、temporal 和 boolean。候选判断先使用 `type_generic`
+allowlist，再由当前 `db_engine_spec.is_column_type_scalar(TableColumn.type)` 使用可信原始类型
+否决复杂列；不能只相信为了展示和序列化而做的通用类型映射。Array、Map、Tuple、Nested、
+Object/JSON、aggregate-state、binary 或引擎声明非标量的类型不进入稳定排序键。无候选时必须
+在创建 page/count QueryContext 前返回 422。
+
+`FR1-ORDER-FOLLOWUP-01`（非 CH-14 阻塞项）：`TableColumn` 不保存业务数据的 PK/unique
+语义，虚拟 Dataset、JOIN 和 UNION 也无法静态证明唯一行身份。当所有排序标量相同、只有
+复杂列不同时，当前 OFFSET 分页的并列顺序仍取决于数据库；跨请求并发写入也可能改变页边界。
+后续应独立评估显式稳定键、唯一约束反射、EngineSpec 行身份能力和 keyset pagination，不能在
+本修复中静默引入高成本或可能碰撞的复杂值 hash。该限制不改变已批准的“无标量才 422”契约，
+也不重新打开 `V4-T01B`。
 
 ### 5.4 有界客户端模式
 
@@ -346,6 +359,7 @@ bounded client 模式不执行独立 Count 查询：查询 K+1 行，若取到�
 | Frontend API | `components/Chart/chartAction.ts`                  | 类型化 `detailMode` 和 `search` 参数        |
 | Schema       | `views/datasource/schemas.py`                      | 增加 mode/search 校验                       |
 | Query        | `views/datasource/utils.py`                        | 稳定排序、K+1、容量检查；保留现有访问校验   |
+| EngineSpec   | `db_engine_specs/base.py`、`clickhouse.py`         | 默认保持兼容；ClickHouse 原始复杂类型否决   |
 
 ## 6. FR-02：Table 告警颜色筛选
 
@@ -861,20 +875,20 @@ endpoint 原始响应。
 
 ### 10.2 错误码
 
-| HTTP | 错误码                                  | 触发条件                                 |
-| ---- | --------------------------------------- | ---------------------------------------- |
-| 400  | `DRILL_DETAIL_INVALID_MODE`             | mode、page 或 page size 非法             |
-| 400  | `DRILL_DETAIL_INVALID_SEARCH_COLUMN`    | 搜索字段未知、不可见或非文本             |
-| 422  | `DRILL_DETAIL_STABLE_ORDER_UNAVAILABLE` | 无可排序标量字段                         |
-| 422  | `DRILL_DETAIL_*_LIMIT_EXCEEDED`         | 有界客户端任一容量超限                   |
-| 400  | `TABLE_ALERT_RULE_INVALID`              | 告警规则引用伪造、过期或不匹配           |
-| 400  | `STYLED_XLSX_UNSUPPORTED`               | styled 请求不是保存的经典 Table          |
-| 400  | `DASHBOARD_XLSX_INVALID_TAB`            | Tab ID 不存在或不是 TAB                  |
-| 422  | `DASHBOARD_XLSX_TABLE_LIMIT_EXCEEDED`   | 解析后经典 Table 超过 10 个              |
-| 422  | `DASHBOARD_XLSX_NO_TABLE`               | 所选 Tab 没有经典 Table                  |
-| 422  | `DASHBOARD_XLSX_CHART_FAILED`           | 任一 Table 查询或写入失败                |
-| 403  | 现有权限错误                            | Dashboard、Chart、Dataset 或导出权限不足 |
-| 413  | 部署层错误                              | 请求体超过反向代理或 Flask 限制          |
+| HTTP | 错误码                                  | 触发条件                                             |
+| ---- | --------------------------------------- | ---------------------------------------------------- |
+| 400  | `DRILL_DETAIL_INVALID_MODE`             | mode、page 或 page size 非法                         |
+| 400  | `DRILL_DETAIL_INVALID_SEARCH_COLUMN`    | 搜索字段未知、不可见或非文本                         |
+| 422  | `DRILL_DETAIL_STABLE_ORDER_UNAVAILABLE` | 无可排序标量字段；含 generic STRING 的复杂列也不例外 |
+| 422  | `DRILL_DETAIL_*_LIMIT_EXCEEDED`         | 有界客户端任一容量超限                               |
+| 400  | `TABLE_ALERT_RULE_INVALID`              | 告警规则引用伪造、过期或不匹配                       |
+| 400  | `STYLED_XLSX_UNSUPPORTED`               | styled 请求不是保存的经典 Table                      |
+| 400  | `DASHBOARD_XLSX_INVALID_TAB`            | Tab ID 不存在或不是 TAB                              |
+| 422  | `DASHBOARD_XLSX_TABLE_LIMIT_EXCEEDED`   | 解析后经典 Table 超过 10 个                          |
+| 422  | `DASHBOARD_XLSX_NO_TABLE`               | 所选 Tab 没有经典 Table                              |
+| 422  | `DASHBOARD_XLSX_CHART_FAILED`           | 任一 Table 查询或写入失败                            |
+| 403  | 现有权限错误                            | Dashboard、Chart、Dataset 或导出权限不足             |
+| 413  | 部署层错误                              | 请求体超过反向代理或 Flask 限制                      |
 
 错误响应使用 Superset 既有 error payload 格式；message 可包含 Chart 标题，但不能包含
 SQL、数据库错误原文、过滤值或数据样本。
@@ -926,17 +940,21 @@ SQL、数据库错误原文、过滤值或数据样本。
 门禁见
 [数据质量 BI 增强实施计划](./superset-data-quality-bi-implementation-plan.md)。
 
-| 范围               | As-built 提交 |
-| ------------------ | ------------- |
-| FR-01              | `de65297208`  |
-| FR-02              | `a8b507c29a`  |
-| FR-03              | `f02a5937b4`  |
-| FR-04              | `8e7dcabcd7`  |
-| FR-05              | `5f4c176026`  |
-| FR-01 分页可见性   | `dee7616f21`  |
-| CH-13、UI-DTD-01   | `c18ed1fd02`  |
-| FR2-UI-FOLLOWUP-01 | `0da4a89de1`  |
-| FR2-UI-FOLLOWUP-02 | `ac5b40bb36`  |
+| 范围               | As-built 提交   |
+| ------------------ | --------------- |
+| FR-01              | `de65297208`    |
+| FR-02              | `a8b507c29a`    |
+| FR-03              | `f02a5937b4`    |
+| FR-04              | `8e7dcabcd7`    |
+| FR-05              | `5f4c176026`    |
+| FR-01 分页可见性   | `dee7616f21`    |
+| CH-13、UI-DTD-01   | `c18ed1fd02`    |
+| CH-14              | 本文所在 commit |
+| FR2-UI-FOLLOWUP-01 | `0da4a89de1`    |
+| FR2-UI-FOLLOWUP-02 | `ac5b40bb36`    |
+
+`CH-14` 已完成 `V4-T01B`：真实 ClickHouse 21.3 的物理/虚拟 Array-only、混合投影、
+双 connector 原始类型持久化、容量边界及三身份 RLS count/data 均通过；临时对象已精确清理。
 
 ### 阶段 1：FR-01
 
@@ -1065,9 +1083,10 @@ SQL、数据库错误原文、过滤值或数据样本。
 
 V1.4 增量验收不改变 AC-01～AC-17 编号：
 
-| 增量 AC   | 范围                  | 可验证结果                                                                                | 主要测试层级            |
-| --------- | --------------------- | ----------------------------------------------------------------------------------------- | ----------------------- |
-| ADD-AC-03 | FR2-UI-FOLLOWUP-01/02 | 三档使用统一无方向性颜色块和主题色；Tooltip、a11y、键盘和选中勾正确；内部筛选协议保持不变 | Frontend unit + 本机 UI |
+| 增量 AC   | 范围                  | 可验证结果                                                                                  | 主要测试层级                      |
+| --------- | --------------------- | ------------------------------------------------------------------------------------------- | --------------------------------- |
+| ADD-AC-03 | FR2-UI-FOLLOWUP-01/02 | 三档使用统一无方向性颜色块和主题色；Tooltip、a11y、键盘和选中勾正确；内部筛选协议保持不变   | Frontend unit + 本机 UI           |
+| ADD-AC-04 | CH-14                 | ClickHouse 复杂原始类型不能因 generic STRING 成为稳定排序/搜索列；Base 默认不影响其他数据库 | Unit + API + 真实 ClickHouse 21.3 |
 
 ## 15. 发布、回滚与运维
 
@@ -1174,7 +1193,7 @@ seed 的前提下增加第 26 项七粒度小写 `dateTrunc` 等价检查并再�
 | CH-06 | Qualified Relation     | 页面、count、totals 和 export 使用同一嵌套子查询；虽然 21.3 已验证 CTE 可用，产品 SQL 优先嵌套子查询，避免旧优化器重复展开 CTE 的计划差异                                                                                 |
 | CH-07 | 数值与类型             | 阈值按 subject 的 Decimal/Float/Int 类型显式转换；基线使用 Date、DateTime、UInt8、UInt64、Decimal64、Nullable 和 LowCardinality，避免只在新版本存在的类型/函数                                                            |
 | CH-08 | UInt64/XLSX            | `UInt64` 大于 15 位时保持字符串表示写入 Excel；不得先转 JavaScript Number 或 Python float                                                                                                                                 |
-| CH-09 | Array/复杂类型         | Array/Map/Tuple/JSON 类结果只能显示/导出为序列化字符串，不能成为告警筛选 subject 或稳定排序兜底列                                                                                                                         |
+| CH-09 | Array/复杂类型         | Array/Map/Tuple/Nested/Object/JSON/aggregate-state 类结果可继续按既有映射显示或导出，但不能成为告警筛选 subject、结构化文本搜索列或稳定排序兜底列；判定使用持久化原始类型而非仅使用 `type_generic`                        |
 | CH-10 | 查询限制               | 继续使用应用层 row/page/byte 上限；不得依赖 21.3 之后新增的 query settings；深分页和导出受现有 timeout、`ROW_LIMIT` 控制                                                                                                  |
 | CH-11 | 长 SQL                 | “传输完整”与“21.3 可执行”分开验收；传输可包含任意文本，执行型 fixture 只能使用 21.3 已支持的 SQL 语法                                                                                                                     |
 | CH-12 | 可重复数据             | 每次测试前运行版本门禁和 `validate.sql`；任一数据质量检查失败时禁止继续 UI/API 测试，先重新 seed 或修复 fixture                                                                                                           |
@@ -1189,6 +1208,9 @@ seed 的前提下增加第 26 项七粒度小写 `dateTrunc` 等价检查并再�
 - Search column 只允许 ClickHouse 映射为字符串的物理列；`ILIKE` 值通过驱动参数绑定。
 - 稳定排序从搜索列开始，再追加物理标量列；对 Nullable 列生成
   `isNull(column), column`。
+- `Array(Int32)` 等复杂列即使被通用化为 `GenericDataType.STRING`，仍由共享
+  `ClickHouseBaseEngineSpec` 根据 `TableColumn.type` 否决；`clickhouse` 与 `clickhousedb`
+  同时生效，Base 默认允许，因此 MySQL/PostgreSQL 路径不变。该否决也用于结构化搜索校验。
 - Server mode 的 200 行上限可防止 ClickHouse OFFSET 扫描结果过大；测试至少覆盖第
   1、2、50 页。
 - Bounded client 的字节数必须按驱动解码后的 UTF-8 JSON 计算，不能使用 ClickHouse
@@ -1274,20 +1296,22 @@ REST 和权限用例标记 Environment Blocked，不得伪报通过。
 
 ### 18.2 FR-01 测试用例
 
-| ID         | 数据/前置                           | 步骤                               | 预期结果                                                |
-| ---------- | ----------------------------------- | ---------------------------------- | ------------------------------------------------------- |
-| TC-FR01-01 | 旧 Table Slice，无 `drill_detail_*` | 打开 Drill Detail                  | Server mode，50 行第一页，无 Search DOM                 |
-| TC-FR01-02 | `fact_events`，page size 200        | 连续请求第 1、2、50 页             | 每页最多 200；event_id 无重叠/遗漏；顺序可重复          |
-| TC-FR01-03 | page size 201                       | 直接调用 Samples API               | 400 `DRILL_DETAIL_INVALID_MODE`，不执行 ClickHouse 查询 |
-| TC-FR01-04 | `dim_customer.customer_name`        | 搜索 `acme`、`北京`、`München`     | Server 前缀只匹配选定字段；`acme` 命中总数 2,500        |
-| TC-FR01-05 | 数值列 `customer_id`                | 把数值列作为 search column         | 400 `DRILL_DETAIL_INVALID_SEARCH_COLUMN`                |
-| TC-FR01-06 | `fact_events` 1,000/1,001 行子集    | 使用 bounded client                | 1,000 成功且完整；1,001 返回 row limit 错误，无部分数据 |
-| TC-FR01-07 | `drill_wide_flat`                   | 分别获取 961、962 行               | 49,972 cells 成功；50,024 cells 返回 cell limit 错误    |
-| TC-FR01-08 | `export_edge_cases` row 1～18/1～19 | bounded client 获取 payload        | 18 行低于 8 MiB；19 行超过 8 MiB 并整体失败             |
-| TC-FR01-09 | `export_edge_cases.row_id=1`        | 获取 `oversized_cell`              | 1,200,000-byte cell 返回 cell-size 错误                 |
-| TC-FR01-10 | Search 开启                         | 在第 3 页修改关键词/字段/页长/模式 | 页码归零、旧请求取消、结果来自新条件                    |
-| TC-FR01-11 | Array-only 投影                     | Server mode 分页                   | 无可排序标量时返回 422 stable-order 错误                |
-| TC-FR01-12 | APAC RLS 用户                       | 打开 Sales Drill Detail 并搜索     | 所有结果满足 RLS；Count 和页面结果使用同一权限上下文    |
+| ID          | 数据/前置                           | 步骤                                | 预期结果                                                |
+| ----------- | ----------------------------------- | ----------------------------------- | ------------------------------------------------------- |
+| TC-FR01-01  | 旧 Table Slice，无 `drill_detail_*` | 打开 Drill Detail                   | Server mode，50 行第一页，无 Search DOM                 |
+| TC-FR01-02  | `fact_events`，page size 200        | 连续请求第 1、2、50 页              | 每页最多 200；event_id 无重叠/遗漏；顺序可重复          |
+| TC-FR01-03  | page size 201                       | 直接调用 Samples API                | 400 `DRILL_DETAIL_INVALID_MODE`，不执行 ClickHouse 查询 |
+| TC-FR01-04  | `dim_customer.customer_name`        | 搜索 `acme`、`北京`、`München`      | Server 前缀只匹配选定字段；`acme` 命中总数 2,500        |
+| TC-FR01-05  | 数值列 `customer_id`                | 把数值列作为 search column          | 400 `DRILL_DETAIL_INVALID_SEARCH_COLUMN`                |
+| TC-FR01-06  | `fact_events` 1,000/1,001 行子集    | 使用 bounded client                 | 1,000 成功且完整；1,001 返回 row limit 错误，无部分数据 |
+| TC-FR01-07  | `drill_wide_flat`                   | 分别获取 961、962 行                | 49,972 cells 成功；50,024 cells 返回 cell limit 错误    |
+| TC-FR01-08  | `export_edge_cases` row 1～18/1～19 | bounded client 获取 payload         | 18 行低于 8 MiB；19 行超过 8 MiB 并整体失败             |
+| TC-FR01-09  | `export_edge_cases.row_id=1`        | 获取 `oversized_cell`               | 1,200,000-byte cell 返回 cell-size 错误                 |
+| TC-FR01-10  | Search 开启                         | 在第 3 页修改关键词/字段/页长/模式  | 页码归零、旧请求取消、结果来自新条件                    |
+| TC-FR01-11A | 物理 Array-only Dataset             | Server/bounded mode                 | 422 `DRILL_DETAIL_STABLE_ORDER_UNAVAILABLE`；不建查询   |
+| TC-FR01-11B | 虚拟 `SELECT metrics` Array 投影    | Server/bounded mode                 | generic STRING 不能绕过原始类型否决；同样返回精确 422   |
+| TC-FR01-11C | `row_id + metrics` 混合投影         | 翻页并把 metrics 作为 Search column | 排序只含 row_id、页间无重叠；Array Search 返回精确 400  |
+| TC-FR01-12  | APAC RLS 用户                       | 打开 Sales Drill Detail 并搜索      | 所有结果满足 RLS；Count 和页面结果使用同一权限上下文    |
 
 ### 18.3 FR-02 测试用例
 
@@ -1337,22 +1361,22 @@ REST 和权限用例标记 Environment Blocked，不得伪报通过。
 
 ### 18.5 FR-04 测试用例
 
-| ID         | 数据/前置                               | 步骤                                  | 预期结果                                            |
-| ---------- | --------------------------------------- | ------------------------------------- | --------------------------------------------------- |
-| TC-FR04-01 | 保存的 Sales Table                      | `result_format=xlsx, styled=true`     | 背景、文字、整行和 Cell Bar 与屏幕规则一致          |
-| TC-FR04-02 | `styled` 缺省或 Flag off                | 导出同一 Chart                        | 走现有 unstyled `df_to_excel` 路径                  |
-| TC-FR04-03 | 非保存 Chart/非 Table                   | 请求 styled                           | 400 `STYLED_XLSX_UNSUPPORTED`，不信任客户端样式     |
-| TC-FR04-04 | `export_edge_cases`                     | 导出并读取单元格                      | 七类公式前缀均转义；控制字符清理；Unicode 保留      |
-| TC-FR04-05 | long_integer/long_serial                | 导出并用 workbook reader 检查类型和值 | 15 位以上整数为文本且逐位相等                       |
-| TC-FR04-06 | 两个父 Tab + 嵌套 Tab + 重复 Slice      | 调用 Dashboard export                 | Sheet 按 DFS 布局顺序；重复 Slice 只出现一次        |
-| TC-FR04-07 | 混入非 Table 图表                       | 导出所选 Tab                          | Table 正常导出；`_导出说明` 含跳过 Chart 和原因     |
-| TC-FR04-08 | Sheet 标题含 `[]:*?/\\`、>31 字符、重名 | 导出                                  | 非法字符替换、长度合法、稳定产生 ` (2)` 后缀        |
-| TC-FR04-09 | 解析出 10/11 个 Table                   | 分别导出                              | 10 个成功；11 个返回 table-limit 错误，不截断       |
-| TC-FR04-10 | 第 2 个 Table 查询故意失败              | 导出多个 Sheet                        | 返回 JSON 错误，无 XLSX body，临时文件清理          |
-| TC-FR04-11 | 无 Dashboard/can_csv/Dataset 权限；保存值和 dataMask 伪造 Dashboard ID | 分别调用 API | 404/403；授权 Guest 使用服务端 ID；伪造值不能跨 Dashboard |
-| TC-FR04-12 | Native + Cross + alert 组合状态         | 比较 Dashboard 屏幕和 XLSX            | 每个 Sheet 行数、关键聚合和 totals 一致             |
-| TC-FR04-13 | 10 个 10k 级 Table                      | 记录查询和进程内存                    | 查询严格串行；峰值不随 Sheet 数线性累积；全程无 OOM |
-| TC-FR04-14 | 大 cell/8 MiB fixture                   | 导出                                  | 在 Workbook 创建前按产品上限拒绝，不生成损坏文件    |
+| ID         | 数据/前置                                                              | 步骤                                  | 预期结果                                                  |
+| ---------- | ---------------------------------------------------------------------- | ------------------------------------- | --------------------------------------------------------- |
+| TC-FR04-01 | 保存的 Sales Table                                                     | `result_format=xlsx, styled=true`     | 背景、文字、整行和 Cell Bar 与屏幕规则一致                |
+| TC-FR04-02 | `styled` 缺省或 Flag off                                               | 导出同一 Chart                        | 走现有 unstyled `df_to_excel` 路径                        |
+| TC-FR04-03 | 非保存 Chart/非 Table                                                  | 请求 styled                           | 400 `STYLED_XLSX_UNSUPPORTED`，不信任客户端样式           |
+| TC-FR04-04 | `export_edge_cases`                                                    | 导出并读取单元格                      | 七类公式前缀均转义；控制字符清理；Unicode 保留            |
+| TC-FR04-05 | long_integer/long_serial                                               | 导出并用 workbook reader 检查类型和值 | 15 位以上整数为文本且逐位相等                             |
+| TC-FR04-06 | 两个父 Tab + 嵌套 Tab + 重复 Slice                                     | 调用 Dashboard export                 | Sheet 按 DFS 布局顺序；重复 Slice 只出现一次              |
+| TC-FR04-07 | 混入非 Table 图表                                                      | 导出所选 Tab                          | Table 正常导出；`_导出说明` 含跳过 Chart 和原因           |
+| TC-FR04-08 | Sheet 标题含 `[]:*?/\\`、>31 字符、重名                                | 导出                                  | 非法字符替换、长度合法、稳定产生 ` (2)` 后缀              |
+| TC-FR04-09 | 解析出 10/11 个 Table                                                  | 分别导出                              | 10 个成功；11 个返回 table-limit 错误，不截断             |
+| TC-FR04-10 | 第 2 个 Table 查询故意失败                                             | 导出多个 Sheet                        | 返回 JSON 错误，无 XLSX body，临时文件清理                |
+| TC-FR04-11 | 无 Dashboard/can_csv/Dataset 权限；保存值和 dataMask 伪造 Dashboard ID | 分别调用 API                          | 404/403；授权 Guest 使用服务端 ID；伪造值不能跨 Dashboard |
+| TC-FR04-12 | Native + Cross + alert 组合状态                                        | 比较 Dashboard 屏幕和 XLSX            | 每个 Sheet 行数、关键聚合和 totals 一致                   |
+| TC-FR04-13 | 10 个 10k 级 Table                                                     | 记录查询和进程内存                    | 查询严格串行；峰值不随 Sheet 数线性累积；全程无 OOM       |
+| TC-FR04-14 | 大 cell/8 MiB fixture                                                  | 导出                                  | 在 Workbook 创建前按产品上限拒绝，不生成损坏文件          |
 
 ### 18.6 FR-05 测试用例
 

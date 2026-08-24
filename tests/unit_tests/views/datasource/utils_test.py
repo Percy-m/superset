@@ -17,6 +17,7 @@
 """Tests for superset.views.datasource.utils module."""
 
 from dataclasses import dataclass
+from typing import Literal
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -32,6 +33,7 @@ class DatasourceColumn:
 
     column_name: str
     type_generic: GenericDataType
+    type: str | None = None
     expression: str | None = None
     filterable: bool = True
     is_active: bool = True
@@ -317,6 +319,135 @@ def test_prepare_configurable_detail_payload_requires_stable_order():
         )
 
     assert exc_info.value.error_code == "DRILL_DETAIL_STABLE_ORDER_UNAVAILABLE"
+
+
+@pytest.mark.parametrize("detail_mode", ["server", "bounded_client"])
+def test_prepare_configurable_detail_payload_rejects_clickhouse_array_only(
+    detail_mode: Literal["server", "bounded_client"],
+) -> None:
+    """ClickHouse Array metadata cannot satisfy the scalar stable-order contract."""
+    from superset.commands.dataset.exceptions import DatasetSamplesFeatureError
+    from superset.db_engine_specs.clickhouse import ClickHouseConnectEngineSpec
+    from superset.views.datasource.utils import _prepare_configurable_detail_payload
+
+    with pytest.raises(DatasetSamplesFeatureError) as exc_info:
+        _prepare_configurable_detail_payload(
+            {},
+            [
+                DatasourceColumn(
+                    "metrics",
+                    GenericDataType.STRING,
+                    type="Array(Int32)",
+                )
+            ],
+            detail_mode,
+            ClickHouseConnectEngineSpec,
+        )
+
+    assert exc_info.value.status == 422
+    assert exc_info.value.error_code == "DRILL_DETAIL_STABLE_ORDER_UNAVAILABLE"
+
+
+def test_prepare_configurable_detail_payload_skips_clickhouse_array_ordering():
+    """Scalar columns remain ordered when a ClickHouse dataset also has an Array."""
+    from superset.db_engine_specs.clickhouse import ClickHouseConnectEngineSpec
+    from superset.views.datasource.utils import _prepare_configurable_detail_payload
+
+    payload = _prepare_configurable_detail_payload(
+        {},
+        [
+            DatasourceColumn(
+                "metrics",
+                GenericDataType.STRING,
+                type="Array(Int32)",
+            ),
+            DatasourceColumn(
+                "detail_note",
+                GenericDataType.STRING,
+                type="Nullable(String)",
+            ),
+            DatasourceColumn(
+                "event_id",
+                GenericDataType.NUMERIC,
+                type="UInt64",
+            ),
+        ],
+        "server",
+        ClickHouseConnectEngineSpec,
+    )
+
+    assert payload["orderby"] == [("detail_note", True), ("event_id", True)]
+
+
+def test_prepare_configurable_detail_payload_rejects_clickhouse_array_search():
+    """An Array mapped to generic STRING is not a trusted text search field."""
+    from superset.commands.dataset.exceptions import DatasetSamplesFeatureError
+    from superset.db_engine_specs.clickhouse import ClickHouseConnectEngineSpec
+    from superset.views.datasource.utils import _prepare_configurable_detail_payload
+
+    with pytest.raises(DatasetSamplesFeatureError) as exc_info:
+        _prepare_configurable_detail_payload(
+            {"search": {"column": "metrics", "value": "1"}},
+            [
+                DatasourceColumn(
+                    "metrics",
+                    GenericDataType.STRING,
+                    type="Array(Int32)",
+                ),
+                DatasourceColumn(
+                    "event_id",
+                    GenericDataType.NUMERIC,
+                    type="UInt64",
+                ),
+            ],
+            "server",
+            ClickHouseConnectEngineSpec,
+        )
+
+    assert exc_info.value.status == 400
+    assert exc_info.value.error_code == "DRILL_DETAIL_INVALID_SEARCH_COLUMN"
+
+
+@pytest.mark.parametrize(
+    "engine_spec,native_type,generic_type",
+    [
+        pytest.param(
+            "mysql",
+            "VARCHAR(255)",
+            GenericDataType.STRING,
+            id="mysql-varchar",
+        ),
+        pytest.param(
+            "postgresql",
+            "TEXT",
+            GenericDataType.STRING,
+            id="postgresql-text",
+        ),
+    ],
+)
+def test_prepare_configurable_detail_payload_preserves_other_engine_scalars(
+    engine_spec: str,
+    native_type: str,
+    generic_type: GenericDataType,
+) -> None:
+    """The ClickHouse-native veto does not alter common database scalar types."""
+    from superset.db_engine_specs.base import BaseEngineSpec
+    from superset.db_engine_specs.mysql import MySQLEngineSpec
+    from superset.db_engine_specs.postgres import PostgresEngineSpec
+    from superset.views.datasource.utils import _prepare_configurable_detail_payload
+
+    specs: dict[str, type[BaseEngineSpec]] = {
+        "mysql": MySQLEngineSpec,
+        "postgresql": PostgresEngineSpec,
+    }
+    payload = _prepare_configurable_detail_payload(
+        {},
+        [DatasourceColumn("detail", generic_type, type=native_type)],
+        "server",
+        specs[engine_spec],
+    )
+
+    assert payload["orderby"] == [("detail", True)]
 
 
 def test_validate_bounded_client_result_accepts_exact_limits(monkeypatch):
