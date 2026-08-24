@@ -21,7 +21,7 @@ under the License.
 
 | 属性          | 值                                                                                                                       |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| 文档版本      | V1.1                                                                                                                     |
+| 文档版本      | V1.3                                                                                                                     |
 | 文档状态      | Implemented（发布前补充门禁见第 7 节）                                                                                   |
 | 日期          | 2026-08-24                                                                                                               |
 | 原始需求基线  | 数据质量 BI 增强需求 V1.4                                                                                                |
@@ -38,10 +38,10 @@ under the License.
 FR-01～FR-05 已分别落在独立提交中。本补充设计不重新打开原需求，也不新增 FR-06；
 两项改进作为实现后发现的兼容性修正和 UI 缺陷修正单独追踪：
 
-| ID          | 待改进项                                                  | 已确认方案                                                                         | 是否新增 Flag |
-| ----------- | --------------------------------------------------------- | ---------------------------------------------------------------------------------- | ------------- |
-| `CH-13`     | Superset 重生成的时间粒度 SQL 无法在 ClickHouse 21.3 执行 | 新增 Superset 自有 ClickHouse SQLGlot dialect，仅把静态 `DateTrunc` 单位生成为小写 | 否            |
-| `UI-DTD-01` | Drill to Detail 表头、正文滚动宽度和单元格间距不一致      | 由 core `VirtualTable` 计算唯一列布局，同时驱动 AntD header 与 react-window body   | 否            |
+| ID          | 待改进项                                                  | 已确认方案                                                                        | 是否新增 Flag |
+| ----------- | --------------------------------------------------------- | --------------------------------------------------------------------------------- | ------------- |
+| `CH-13`     | Superset 重生成的时间粒度 SQL 无法在 ClickHouse 21.3 执行 | 自有 ClickHouse dialect 生成小写静态单位；Code 36 映射为无 SQL/服务详情的固定错误 | 否            |
+| `UI-DTD-01` | Drill to Detail 表头、正文滚动宽度和单元格间距不一致      | 由 core `VirtualTable` 计算唯一列布局，同时驱动 AntD header 与 react-window body  | 否            |
 
 两项修正都不改变 REST API、`form_data`、数据库结构、权限、RLS 或数据结果。原设计建议
 拆为两个独立提交；实施时按本轮明确指令先完成并审查 `CH-13`，再完成并审查
@@ -267,18 +267,20 @@ key，应明确其优先级高于本修复。
 
 ### 4.4 文件与实现内容
 
-| 文件                                                | As-built 实现内容                                     |
-| --------------------------------------------------- | ----------------------------------------------------- |
-| `superset/sql/dialects/clickhouse.py`               | 新增最小 Generator override，包含类型标注和 docstring |
-| `superset/sql/dialects/__init__.py`                 | 导出 `SupersetClickHouse`                             |
-| `superset/sql/parse.py`                             | 仅替换 `clickhouse`、`clickhousedb` 两个 map value    |
-| `tests/unit_tests/sql/dialects/clickhouse_tests.py` | AST、七种粒度、动态表达式、负向和映射隔离测试         |
+| 文件                                                  | As-built 实现内容                                     |
+| ----------------------------------------------------- | ----------------------------------------------------- |
+| `superset/sql/dialects/clickhouse.py`                 | 新增最小 Generator override，包含类型标注和 docstring |
+| `superset/sql/dialects/__init__.py`                   | 导出 `SupersetClickHouse`                             |
+| `superset/sql/parse.py`                               | 仅替换 `clickhouse`、`clickhousedb` 两个 map value    |
+| `superset/db_engine_specs/clickhouse.py`              | 两个 ClickHouse key 共用精准 Code 36 安全错误映射     |
+| `tests/unit_tests/db_engine_specs/test_clickhouse.py` | 错误映射正向、脱敏与非目标错误回归                    |
+| `tests/unit_tests/sql/dialects/clickhouse_tests.py`   | AST、七种粒度、动态表达式、负向和映射隔离测试         |
 
 不新增 REST、Marshmallow、TypeScript、Feature Flag 或数据库迁移。
 
-`test_clickhouse.py`、`parse_tests.py`、`transpile_to_dialect_test.py` 作为既有回归套件执行，
-没有为了本修正产生文件 diff。Executor、Celery、SQL Lab integration 与
-`validate.sql` 是原设计的增强门禁，本提交没有伪造对应新用例或文件变更。
+`parse_tests.py`、`transpile_to_dialect_test.py` 继续作为既有回归套件执行；
+`test_clickhouse.py` 在验证债务阶段补充 Code 36 安全映射用例。Executor、Celery、SQL Lab
+integration 与 `validate.sql` 是增强门禁，其通过状态以验证执行计划的逐项证据为准。
 
 ### 4.5 影响与兼容性
 
@@ -294,9 +296,10 @@ key，应明确其优先级高于本修复。
 | 新版 ClickHouse                           | 小写单位继续合法，不产生语义差异                    |
 
 legacy `clickhouse` 与 ClickHouse Connect `clickhousedb` 两个 engine key 都必须有单元和
-执行链测试。本机实际数据库目前以 `clickhousedb+connect` 为主；若 legacy
-`clickhouse-sqlalchemy` 驱动未安装，真实 legacy connector 验收必须标记 Blocked，不能
-用映射单测冒充双驱动实测。
+执行链测试。本机主 venv 继续使用 `clickhousedb+connect`；legacy
+`clickhouse-sqlalchemy 0.2.9` 通过一次性 shadow target 连接本机 21.3 native 端口完成七粒度、
+反射、View 与 Code 36 实测，不用映射单测冒充双驱动实测。同步跨层测试覆盖两个 engine key；
+真实异步/Celery 链路在隔离 metadata、Redis DB 和 worker 中使用 active Connect 完成。
 
 ### 4.6 安全、缓存与可观测性
 
@@ -304,7 +307,11 @@ legacy `clickhouse` 与 ClickHouse Connect `clickhousedb` 两个 engine key 都�
 - 允许记录 engine、执行阶段、成功/失败和耗时，不记录 SQL、时间字段或筛选值。
 - 缓存键使用最终 canonical SQL；同一输入重复执行的 key 必须稳定。
 - 不能让失败的大写 SQL 与成功的小写 SQL共享错误缓存结果。
-- 数据库返回错误继续走现有异常清洗，不向前端增加 server stack trace。
+- Code 36/date-trunc datepart 错误使用精确特征匹配并返回固定安全消息；前端、
+  `Query.error_message`、API 错误和 `DEBUG=false` 下的 application INFO 日志不得保留表达式、
+  server version、URL 或 raw driver stack/details。框架错误处理仍可记录只含固定消息的应用栈；
+  `DEBUG=true` 和显式 `QUERY_LOGGER` 属于单独的调试/审计契约，不在匿名遥测保证范围；其他
+  错误沿用既有映射，不扩大行为变更。
 
 ### 4.7 测试矩阵
 
@@ -322,6 +329,7 @@ legacy `clickhouse` 与 ClickHouse Connect `clickhousedb` 两个 engine key 都�
 | `TC-CH13-10` | Regression  | MySQL/PostgreSQL 代表日期 SQL + LIMIT                   | 输出与修改前 snapshot / AST 等价                            |
 | `TC-CH13-11` | Regression  | parse、transpile、executor、celery 全文件               | 锁定 SQLGlot 28.10.0 下全部通过                             |
 | `TC-CH13-12` | Runtime     | 本机 Superset API 与 ClickHouse 21.3                    | 图表及 SQL Lab 七粒度成功，无 SQL 泄漏                      |
+| `TC-CH13-13` | Security    | connect/legacy 的 Code 36 与非目标 Code 36              | 目标错误固定脱敏；其他 ClickHouse 错误保持原映射            |
 
 As-built `c18ed1fd02` 未修改 `validate.sql`；后续验证债务实现已将门禁从 25 项扩展为
 恰好 26 项。第 26 项在 12,000 行 `fact_events` 上分别输出 minute、hour、day、week、
@@ -330,7 +338,18 @@ month、quarter、year 的 mismatch，其中 week 以 `toMonday` 为基线，其
 `PASS`，`--validate-only` 不运行 seed 或 DDL。大写 Code 36 是预期失败测试，应由独立
 helper/API 测试捕获，不能放进会中止的普通 multiquery PASS 门禁。
 
-### 4.8 驱动反射归一化（验证债务）
+### 4.8 Code 36 安全错误映射（验证债务）
+
+ClickHouse 21.3 的 raw 大写 datepart 会在错误中携带表达式片段、server version 和连接 URL。
+共享 `ClickHouseBaseEngineSpec.extract_error_message()` 仅在 `[SQL: ...]` 上下文之前的
+`DB::Exception` 错误段同时满足 Code 36 与
+`doesn't look like datepart name in date_trunc` 特征时返回固定消息：
+`ClickHouse rejected the date truncation unit. Use a lowercase unit.`。匹配不依赖驱动异常
+类型，因此覆盖 connect `0.13.0`、`0.15.1` 和 legacy `0.2.9`；非目标 Code 36 及其他错误
+继续委托 Base EngineSpec。该方法只在 `clickhouse`/`clickhousedb` 继承链中生效，不影响
+MySQL、PostgreSQL 或 YQL。
+
+### 4.9 驱动反射归一化（验证债务）
 
 connect `0.13.0` 与 `0.15.1` 的 SQLAlchemy inspector 都把普通 View 包含在
 `get_table_names()` 中，同时让 `get_view_names()` 返回空集合。Superset 不能把这一驱动
@@ -359,8 +378,10 @@ Table 行为，避免扩大本补丁范围。元数据查询失败必须走现�
 `drill_wide_flat` 的 10,000 行查询和 52 列展开成功；tables API 返回 count=9、8 table、
 1 view 且 relation name 无重复。EngineSpec 的五个安装承载点与生成数据库快照同步为
 `clickhouse-connect>=0.13.0,<1.0`，并由单测与 `pyproject.toml` 做语义比对。
+legacy `clickhouse-sqlalchemy 0.2.9` 的 raw inspector 本身为 8/1，Superset 共享归一化后仍
+保持 8/1；该差异不改变 Connect 驱动需要修正 9/0 的结论。
 
-### 4.9 发布与回滚
+### 4.10 发布与回滚
 
 `CH-13` 不设 Feature Flag。由于 As-built 与 UI-DTD-01 合并在 `c18ed1fd02`，直接
 revert 会同时撤销两项修正；仅回滚 ClickHouse 时应先拆出该提交中的四个后端/测试文件
@@ -571,9 +592,10 @@ revert 会同时撤销两项修正；如需仅回滚 UI，应先从该提交拆�
 5. 使用 `clickhousedb+connect` 对本机 ClickHouse 21.3 执行七种小写粒度。
 6. 完成独立代码审查并归档到 `c18ed1fd02`。
 
-As-built 状态：实现与本机 connector 验收完成。legacy `clickhouse-sqlalchemy` driver、
-Executor/Celery/SQL Lab 专项 integration 自动化仍待补，不得把现有单测解释为双驱动和
-全部异步链路已验收。
+As-built 状态：实现与本机 connector 验收完成。后续 V3 验证又完成 legacy
+`clickhouse-sqlalchemy 0.2.9` 真实 21.3、两个 engine key 同步跨层，以及隔离
+SQL Lab async/Celery 单、多 statement 运行时验收。仓库内仍未固化 legacy 专用 Celery
+端到端自动化，不能把 active Connect 的异步实测解释为 legacy 异步实测。
 
 ### 6.2 UI-DTD-01
 
@@ -590,10 +612,10 @@ classic scrollbar、52 列真实浏览器、200% zoom 和 Playwright spec 固化
 
 ## 7. 增量验收追踪
 
-| 验收 ID     | 需求                         | 已完成证据                                                                                    | 待补门禁                                        |
-| ----------- | ---------------------------- | --------------------------------------------------------------------------------------------- | ----------------------------------------------- |
-| `ADD-AC-01` | ClickHouse 21.3 时间粒度兼容 | 两个 engine 映射与七粒度单测；`clickhousedb+connect` 真实 21.3；MySQL/PostgreSQL/YQL 回归通过 | legacy driver、sync/async 专项 integration      |
-| `ADD-AC-02` | Drill Detail 对齐            | 纯布局/组件测试；overlay 环境首屏、max、resize 几何差值 `0px`；分页与虚拟化通过               | classic scrollbar、52 列浏览器、Playwright 固化 |
+| 验收 ID     | 需求                         | 已完成证据                                                                                                                      | 待补门禁                                        |
+| ----------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| `ADD-AC-01` | ClickHouse 21.3 时间粒度兼容 | 两个 engine 映射与七粒度单测；Connect/legacy 真实 21.3；双 key 同步跨层；active Connect async/Celery；MySQL/PostgreSQL/YQL 回归 | legacy 专用 Celery 端到端自动化固化             |
+| `ADD-AC-02` | Drill Detail 对齐            | 纯布局/组件测试；overlay 环境首屏、max、resize 几何差值 `0px`；分页与虚拟化通过                                                 | classic scrollbar、52 列浏览器、Playwright 固化 |
 
 原 AC-01～AC-17 不重新编号。“Implemented”表示代码已落地，不等同于上述跨平台发布门禁已经
 全部关闭；待补项完成后才能标记为 Fully Verified。
@@ -628,6 +650,7 @@ pre-commit run --all-files
 git diff --check
 ```
 
-此外已通过本机 ClickHouse `21.3.20.1` 七粒度执行和 Dashboard Drill Detail DOM 几何
-量测。仓库不存在的 Playwright spec、未执行的 legacy driver 和专项 integration 均明确
-列为待补项，不以人工量测或其他测试结果替代。
+此外已通过本机 ClickHouse `21.3.20.1` 的 Connect/legacy 七粒度执行、active Connect
+同步/异步/Celery 链路和 Dashboard Drill Detail DOM 几何量测。待补项仅为仓库内尚未固化的
+legacy 专用 Celery 端到端自动化，以及 UI 的 classic scrollbar、52 列浏览器和 Playwright
+自动化；不以人工量测或其他测试结果替代这些门禁。

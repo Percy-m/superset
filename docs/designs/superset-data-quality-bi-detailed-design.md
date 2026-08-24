@@ -21,7 +21,7 @@ under the License.
 
 | 属性          | 值                                                                                                          |
 | ------------- | ----------------------------------------------------------------------------------------------------------- |
-| 文档版本      | V1.4                                                                                                        |
+| 文档版本      | V1.6                                                                                                        |
 | 文档状态      | Implemented（验收持续补充）                                                                                 |
 | 日期          | 2026-08-24                                                                                                  |
 | 输入需求      | 《Superset 6.0 数据质量 BI 增强需求分析与设计文档》V1.4                                                     |
@@ -746,7 +746,8 @@ Sheet 名处理顺序：
 ### 9.1 现状边界
 
 - Dataset Modal 的保存请求已经使用 `SupersetClient.put` JSON，不修改。
-- SQL Lab 执行请求已经使用 `SupersetClient.post` JSON，不修改。
+- SQL Lab 执行请求已经使用 `SupersetClient.post` JSON，不修改执行协议或语义；其事件日志采集
+  仍需排除 SQL 正文。
 - `ViewQuery.tsx` 的 modifier-click 新窗口路径仍将 SQL 放到 query string，需要替换。
 - `ViewQueryModalFooter.tsx` 已调用 `postForm`，但当前 payload 没有包装为后端
   `request.form["form_data"]`，需要修正。
@@ -810,6 +811,21 @@ form_data=<safeStringify(requestedQuery)>
 正文、CSRF Token、Guest Token 或 query string；其他 endpoint 及 SQL Lab GET 的既有日志
 行为不变。部署基线必须允许至少 256 KiB 的表单请求体，以覆盖 12,000 Unicode 字符及请求
 元数据；如果反向代理限制更低，应在发布前提高限制。
+
+`POST /api/v1/sqllab/execute/` 的 JSON 执行协议保持不变，但 request-derived event payload
+也必须使用端点级白名单，只允许 path、database ID、sync/async、query limit、载荷状态、
+字符数、UTF-8 字节数和 SHA-256 前 12 位。禁止记录 `sql`、`templateParams`、catalog/schema、
+client/tab 标识、Token 或 query string。SQL Lab 的授权执行与审计契约仍可在 `Query.sql`、
+`Query.executed_sql` 和成功响应的 `sql/executedSql` 字段中保存 SQL；禁止面是 URL、Referer、
+浏览器历史、事件日志、INFO 日志和错误字段。生产验证固定 `DEBUG=false`、
+`QUERY_LOGGER=None`，显式审计 logger 不属于匿名遥测。白名单继续使用既有 `runAsync`、
+`queryLimit` 和 `select_as_cta` 键名，以保持自定义 EventLogger 的 `curated_payload` 契约；
+SQL 含无法 UTF-8 编码的孤立 surrogate 时只记录 `invalid_sql_encoding`，日志采集不得覆盖
+endpoint 原始响应。
+
+本变更不新增数据库迁移，也不回写历史 `Log.json`。上线后的新请求按白名单记录；上线前
+已经存在的日志由部署方按既有留存和安全处置流程管理，不能把新请求验证结果误写成历史
+数据已被自动清洗。
 
 ### 9.4 完整性要求
 
@@ -1104,8 +1120,9 @@ V1.4 增量验收不改变 AC-01～AC-17 编号：
 初始本地 Python 驱动版本高于仓库 `pyproject.toml` 声明的
 `clickhouse-connect>=0.13.0,<1.0` 范围，因此初始“本机连接成功”不能代替依赖范围内的
 CI 矩阵。2026-08-24 已先在隔离 shadow 中验证 `0.15.1`，再把主 venv 回退到该版本；最低
-版本 `0.13.0` 在第二个 shadow 中通过 120 项单测和真实 21.3 七粒度查询。两版旧驱动的
-SQLAlchemy inspector 都把 1 个 View 合并进 table 列表，原始结果为 tables=9/views=0。
+版本 `0.13.0` 在第二个 shadow 中通过 120 项单测和真实 21.3 七粒度查询。两个
+ClickHouse Connect 版本的 SQLAlchemy inspector 都把 1 个 View 合并进 table 列表，原始
+结果为 tables=9/views=0；legacy `clickhouse-sqlalchemy 0.2.9` 的 raw inspector 已是 8/1。
 Superset 在共享 `ClickHouseBaseEngineSpec` 中通过绑定参数读取 `system.tables` 的普通
 `View`，并从 table 集合中扣除，两个驱动版本均归一化为 tables=8/views=1；View 的
 10,000 行查询、HTTP tables API 和 SQL Lab 关系树/列展开均通过。该归一化只进入
@@ -1139,22 +1156,23 @@ seed 的前提下增加第 26 项七粒度小写 `dateTrunc` 等价检查并再�
 
 ### 17.2 ClickHouse 21.3 专项需求
 
-| ID    | 适配需求               | 设计决定与验收口径                                                                                                                                             |
-| ----- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| CH-01 | Server/driver 版本门禁 | 测试启动先执行 `SELECT version()`，必须为 `21.3.x`；CI 覆盖仓库声明的 ClickHouse Connect 最低/实际锁定版本                                                     |
-| CH-02 | HTTP 连接与代理        | 本机 `127.0.0.1`、`localhost` 必须进入 `NO_PROXY`；否则 502 视为环境失败，不视为 ClickHouse SQL 失败                                                           |
-| CH-03 | 搜索语法               | 使用参数绑定的 `column ILIKE :prefix`；21.3 已实测支持英文大小写无关前缀，字段仍须为可信物理 String/FixedString/LowCardinality(String)                         |
-| CH-04 | 稳定分页               | 每个分页查询显式 `ORDER BY`；NULL 使用 `isNull(col), col`，不依赖 MergeTree 物理顺序；`LIMIT :limit OFFSET :offset` 已实测可用                                 |
-| CH-05 | 告警 WHERE/HAVING      | 维度谓词进入 WHERE，保存指标谓词进入 HAVING；同 subject OR、跨 subject AND；不生成 PREWHERE 提示，让 21.3 优化器自行选择                                       |
-| CH-06 | Qualified Relation     | 页面、count、totals 和 export 使用同一嵌套子查询；虽然 21.3 已验证 CTE 可用，产品 SQL 优先嵌套子查询，避免旧优化器重复展开 CTE 的计划差异                      |
-| CH-07 | 数值与类型             | 阈值按 subject 的 Decimal/Float/Int 类型显式转换；基线使用 Date、DateTime、UInt8、UInt64、Decimal64、Nullable 和 LowCardinality，避免只在新版本存在的类型/函数 |
-| CH-08 | UInt64/XLSX            | `UInt64` 大于 15 位时保持字符串表示写入 Excel；不得先转 JavaScript Number 或 Python float                                                                      |
-| CH-09 | Array/复杂类型         | Array/Map/Tuple/JSON 类结果只能显示/导出为序列化字符串，不能成为告警筛选 subject 或稳定排序兜底列                                                              |
-| CH-10 | 查询限制               | 继续使用应用层 row/page/byte 上限；不得依赖 21.3 之后新增的 query settings；深分页和导出受现有 timeout、`ROW_LIMIT` 控制                                       |
-| CH-11 | 长 SQL                 | “传输完整”与“21.3 可执行”分开验收；传输可包含任意文本，执行型 fixture 只能使用 21.3 已支持的 SQL 语法                                                          |
-| CH-12 | 可重复数据             | 每次测试前运行版本门禁和 `validate.sql`；任一数据质量检查失败时禁止继续 UI/API 测试，先重新 seed 或修复 fixture                                                |
-| CH-R1 | Table/View 反射归一化  | 驱动 raw inspector 的 9/0 由共享 ClickHouse EngineSpec 归一化为 8/1；schema 使用绑定参数，缺省 schema 使用 `currentDatabase()`，普通 View 不再伪装成 Table     |
-| CH-R2 | 驱动版本说明一致       | EngineSpec metadata、生成的数据库快照和 `pyproject.toml` 都声明 `clickhouse-connect>=0.13.0,<1.0`；不得引导安装未纳入支持范围的 1.x                            |
+| ID    | 适配需求               | 设计决定与验收口径                                                                                                                                                                                                        |
+| ----- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CH-01 | Server/driver 版本门禁 | 测试启动先执行 `SELECT version()`，必须为 `21.3.x`；CI 覆盖仓库声明的 ClickHouse Connect 最低/实际锁定版本                                                                                                                |
+| CH-02 | HTTP 连接与代理        | 本机 `127.0.0.1`、`localhost` 必须进入 `NO_PROXY`；否则 502 视为环境失败，不视为 ClickHouse SQL 失败                                                                                                                      |
+| CH-03 | 搜索语法               | 使用参数绑定的 `column ILIKE :prefix`；21.3 已实测支持英文大小写无关前缀，字段仍须为可信物理 String/FixedString/LowCardinality(String)                                                                                    |
+| CH-04 | 稳定分页               | 每个分页查询显式 `ORDER BY`；NULL 使用 `isNull(col), col`，不依赖 MergeTree 物理顺序；`LIMIT :limit OFFSET :offset` 已实测可用                                                                                            |
+| CH-05 | 告警 WHERE/HAVING      | 维度谓词进入 WHERE，保存指标谓词进入 HAVING；同 subject OR、跨 subject AND；不生成 PREWHERE 提示，让 21.3 优化器自行选择                                                                                                  |
+| CH-06 | Qualified Relation     | 页面、count、totals 和 export 使用同一嵌套子查询；虽然 21.3 已验证 CTE 可用，产品 SQL 优先嵌套子查询，避免旧优化器重复展开 CTE 的计划差异                                                                                 |
+| CH-07 | 数值与类型             | 阈值按 subject 的 Decimal/Float/Int 类型显式转换；基线使用 Date、DateTime、UInt8、UInt64、Decimal64、Nullable 和 LowCardinality，避免只在新版本存在的类型/函数                                                            |
+| CH-08 | UInt64/XLSX            | `UInt64` 大于 15 位时保持字符串表示写入 Excel；不得先转 JavaScript Number 或 Python float                                                                                                                                 |
+| CH-09 | Array/复杂类型         | Array/Map/Tuple/JSON 类结果只能显示/导出为序列化字符串，不能成为告警筛选 subject 或稳定排序兜底列                                                                                                                         |
+| CH-10 | 查询限制               | 继续使用应用层 row/page/byte 上限；不得依赖 21.3 之后新增的 query settings；深分页和导出受现有 timeout、`ROW_LIMIT` 控制                                                                                                  |
+| CH-11 | 长 SQL                 | “传输完整”与“21.3 可执行”分开验收；传输可包含任意文本，执行型 fixture 只能使用 21.3 已支持的 SQL 语法                                                                                                                     |
+| CH-12 | 可重复数据             | 每次测试前运行版本门禁和 `validate.sql`；任一数据质量检查失败时禁止继续 UI/API 测试，先重新 seed 或修复 fixture                                                                                                           |
+| CH-R1 | Table/View 反射归一化  | 驱动 raw inspector 的 9/0 由共享 ClickHouse EngineSpec 归一化为 8/1；schema 使用绑定参数，缺省 schema 使用 `currentDatabase()`，普通 View 不再伪装成 Table                                                                |
+| CH-R2 | 驱动版本说明一致       | EngineSpec metadata、生成的数据库快照和 `pyproject.toml` 都声明 `clickhouse-connect>=0.13.0,<1.0`；不得引导安装未纳入支持范围的 1.x                                                                                       |
+| CH-R3 | Code 36 安全错误映射   | 仅当 `[SQL: ...]` 前的 `DB::Exception` 错误段同时匹配 Code 36 和 date-trunc datepart 特征时返回固定可操作消息；排除表达式、server version、URL 和 raw driver stack/details；两个 ClickHouse key 共用，其他错误/数据库不变 |
 
 ### 17.3 各需求的 ClickHouse 落地补充
 
@@ -1206,6 +1224,9 @@ seed 的前提下增加第 26 项七粒度小写 `dateTrunc` 等价检查并再�
 - 另设执行型长 SQL：由 300 行注释和一个 21.3 支持的 SELECT 组成，验证 SQL Lab
   submit、query record 与 ClickHouse 成功状态。
 - 本机代理必须绕过 127.0.0.1；代理导致的 502 在测试报告中标记 Environment Blocked。
+- raw 大写 datepart 负例必须验证 Code 36；SQL Lab API、`Query.error_message`、event/app log
+  只出现固定安全消息，不能包含表达式、server version、URL、SQL/filter canary 或 raw driver
+  stack/details；框架错误处理可以保留只含固定安全消息的应用栈。
 
 ### 17.4 测试数据资产
 
@@ -1336,6 +1357,7 @@ REST 和权限用例标记 Environment Blocked，不得伪报通过。
 | TC-FR05-05 | 模拟 POST 413/500                      | new-tab 打开          | 显示通用 toast；不 fallback 到 GET；当前页面内容保留 |
 | TC-FR05-06 | 300 行注释 + 21.3 SELECT               | SQL Lab 执行          | Query record 保留完整 SQL，ClickHouse 返回成功       |
 | TC-FR05-07 | localhost 走代理/绕过代理              | 分别连接              | 代理 502 标记环境失败；NO_PROXY 后连接 21.3 成功     |
+| TC-FR05-08 | execute JSON 含 SQL/模板/Token canary  | 检查 event `Log.json` | 只含白名单维度、长度和哈希；正文/canary 命中为 0     |
 
 ### 18.7 跨需求与兼容性测试
 
@@ -1345,7 +1367,7 @@ REST 和权限用例标记 Environment Blocked，不得伪报通过。
 | TC-CROSS-02 | 逐个 Flag 开启                         | 重复对应 FR 用例                       | 不产生未声明依赖；Tab XLSX 依赖 Styled XLSX          |
 | TC-CROSS-03 | ClickHouse 21.3 + driver 最低/锁定版本 | 运行 connection、metadata、query suite | 两个驱动版本均能反射类型、参数查询和取数             |
 | TC-CROSS-04 | ClickHouse 非 21.3                     | 运行 seed helper                       | 版本门禁立即失败且不 drop/recreate fixture           |
-| TC-CROSS-05 | 连续运行 seed 两次                     | 比较 validate 输出                     | 两次均 25 PASS，行数和分布一致，无重复累积           |
+| TC-CROSS-05 | 连续运行 seed 两次                     | 比较 validate 输出                     | 两次均 26 PASS，行数和分布一致，无重复累积           |
 | TC-CROSS-06 | 篡改/删除一条 fixture                  | 先 validate 再跑 UI/API                | validate FAIL 阻断测试；重新 seed 后恢复 PASS        |
 | TC-CROSS-07 | 告警 + Permalink + Tab XLSX + APAC RLS | 分享、打开、导出                       | 屏幕、分享恢复和 XLSX 的授权数据及 totals 一致       |
 | TC-CROSS-08 | Superset 未启动                        | 执行自动测试入口                       | 数据/driver checks 可执行；UI/API 明确标记 Blocked   |

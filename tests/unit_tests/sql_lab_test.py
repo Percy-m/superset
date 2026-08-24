@@ -17,6 +17,7 @@
 # pylint: disable=import-outside-toplevel, invalid-name, unused-argument, too-many-locals
 
 import json  # noqa: TID251
+from contextlib import nullcontext
 from unittest.mock import MagicMock
 from urllib.parse import parse_qs, urlparse
 from uuid import UUID
@@ -65,6 +66,88 @@ def test_execute_query(mocker: MockerFixture, app: None) -> None:
         query,
     )
     SupersetResultSet.assert_called_with([(42,)], cursor.description, db_engine_spec)
+
+
+@pytest.mark.parametrize("engine", ["clickhouse", "clickhousedb"])
+@with_config(
+    {
+        "DISALLOWED_SQL_FUNCTIONS": {},
+        "DISALLOWED_SQL_TABLES": {},
+        "QUERY_LOGGER": None,
+        "SQLLAB_CTAS_NO_LIMIT": False,
+        "SQLLAB_PAYLOAD_MAX_MB": None,
+        "SQL_MAX_ROW": 0,
+        "STATS_LOGGER": MagicMock(),
+        "TROUBLESHOOTING_LINK": None,
+    }
+)
+def test_sync_sqllab_clickhouse_date_trunc_reaches_cursor_and_query(
+    mocker: MockerFixture,
+    app: None,
+    engine: str,
+) -> None:
+    """Verify ClickHouse SQL formatting reaches the cursor and query audit field."""
+    from superset.db_engine_specs.clickhouse import (
+        ClickHouseConnectEngineSpec,
+        ClickHouseEngineSpec,
+    )
+
+    engine_spec = (
+        ClickHouseEngineSpec if engine == "clickhouse" else ClickHouseConnectEngineSpec
+    )
+    cursor = MagicMock()
+    cursor.description = [("bucket", None, None, None, None, None, None)]
+    cursor.fetchall.return_value = [("2025-03-01",)]
+    connection = MagicMock()
+    connection.cursor.return_value = cursor
+
+    database = MagicMock()
+    database.allow_dml = False
+    database.allow_run_async = False
+    database.cache_timeout = None
+    database.db_engine_spec = engine_spec
+    database.get_raw_connection.return_value = nullcontext(connection)
+    database.mutate_sql_based_on_config.side_effect = lambda sql: sql
+
+    query = MagicMock()
+    query.catalog = None
+    query.database = database
+    query.end_time = None
+    query.limit = None
+    query.schema = "superset_quality_21_3"
+    query.select_as_cta = False
+    query.status = QueryStatus.PENDING
+    query.to_dict.return_value = {}
+
+    mocker.patch("superset.sql_lab.get_query", return_value=query)
+    mocker.patch("superset.sql_lab.db.session.commit")
+    mocker.patch("superset.sql_lab.db.session.refresh")
+    mocker.patch(
+        "superset.sql_lab.event_logger.log_context", return_value=nullcontext()
+    )
+    result_set = MagicMock(size=1, columns=[{"name": "bucket"}])
+    mocker.patch("superset.sql_lab.SupersetResultSet", return_value=result_set)
+    mocker.patch(
+        "superset.sql_lab._serialize_and_expand_data",
+        return_value=([{"bucket": "2025-03-01"}], [], [], []),
+    )
+
+    payload = execute_sql_statements(
+        query_id=1,
+        rendered_query=("SELECT toStartOfMonth(event_time) AS bucket FROM fact_events"),
+        return_results=True,
+        store_results=False,
+        start_time=None,
+        expand_data=False,
+        log_params={},
+    )
+
+    cursor_sql = cursor.execute.call_args.args[0]
+    assert payload is not None
+    assert payload["status"] == QueryStatus.SUCCESS
+    assert cursor_sql == query.executed_sql
+    assert "dateTrunc('month', event_time)" in cursor_sql
+    assert "dateTrunc('MONTH', event_time)" not in cursor_sql
 
 
 @with_config(

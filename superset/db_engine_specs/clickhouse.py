@@ -55,6 +55,14 @@ logger = logging.getLogger(__name__)
 class ClickHouseBaseEngineSpec(BaseEngineSpec):
     """Shared engine spec for ClickHouse."""
 
+    _date_trunc_datepart_error_code = re.compile(r"\bcode\s*:\s*36\b", re.IGNORECASE)
+    _date_trunc_datepart_error_detail = re.compile(
+        r"doesn(?:'|’)?t look like datepart name in date[_ ]?trunc",
+        re.IGNORECASE,
+    )
+    _db_exception_marker = re.compile(r"\bdb::exception\s*:", re.IGNORECASE)
+    _sql_error_context_marker = re.compile(r"\[\s*sql\s*:", re.IGNORECASE)
+
     time_groupby_inline = True
     supports_multivalues_insert = True
 
@@ -136,6 +144,29 @@ class ClickHouseBaseEngineSpec(BaseEngineSpec):
         if isinstance(sqla_type, types.DateTime):
             return f"""toDateTime('{dttm.isoformat(sep=" ", timespec="seconds")}')"""
         return None
+
+    @classmethod
+    def extract_error_message(cls, ex: Exception) -> str:
+        """Return a safe, actionable message for ClickHouse datepart error 36."""
+        error_message = str(ex)
+        sql_context_match = cls._sql_error_context_marker.search(error_message)
+        server_error = (
+            error_message[: sql_context_match.start()]
+            if sql_context_match
+            else error_message
+        )
+        db_exception_match = cls._db_exception_marker.search(server_error)
+        if (
+            db_exception_match
+            and cls._date_trunc_datepart_error_code.search(
+                server_error[: db_exception_match.end()]
+            )
+            and cls._date_trunc_datepart_error_detail.search(
+                server_error[db_exception_match.end() :]
+            )
+        ):
+            return "ClickHouse rejected the date truncation unit. Use a lowercase unit."
+        return super().extract_error_message(ex)
 
     @classmethod
     def get_table_names(

@@ -79,6 +79,65 @@ def test_execute_connection_error() -> None:
     assert str(excinfo.value) == "Connection failed"
 
 
+@pytest.mark.parametrize("engine", ["clickhouse", "clickhousedb"])
+def test_date_trunc_datepart_error_is_sanitized(engine: str) -> None:
+    from superset.db_engine_specs.clickhouse import (
+        ClickHouseConnectEngineSpec,
+        ClickHouseEngineSpec,
+    )
+
+    spec = (
+        ClickHouseEngineSpec if engine == "clickhouse" else ClickHouseConnectEngineSpec
+    )
+    error = Exception(
+        "Received ClickHouse exception, Code: 36. DB::Exception: "
+        "MONTH doesn't look like datepart name in date_trunc while processing "
+        "sensitive_expression "
+        "at http://database.internal:8123"
+    )
+
+    message = spec.extract_error_message(error)
+
+    assert message == (
+        "ClickHouse rejected the date truncation unit. Use a lowercase unit."
+    )
+    assert "sensitive_expression" not in message
+    assert "database.internal" not in message
+
+
+@pytest.mark.parametrize("engine", ["clickhouse", "clickhousedb"])
+def test_unrelated_clickhouse_errors_keep_default_message(engine: str) -> None:
+    from superset.db_engine_specs.clickhouse import (
+        ClickHouseConnectEngineSpec,
+        ClickHouseEngineSpec,
+    )
+
+    spec = (
+        ClickHouseEngineSpec if engine == "clickhouse" else ClickHouseConnectEngineSpec
+    )
+    error = Exception("Code: 36. Another ClickHouse validation error")
+
+    assert spec.extract_error_message(error) == f"{engine} error: {error}"
+
+
+@pytest.mark.parametrize("engine", ["clickhouse", "clickhousedb"])
+def test_date_trunc_phrase_in_sql_does_not_reclassify_error(engine: str) -> None:
+    from superset.db_engine_specs.clickhouse import (
+        ClickHouseConnectEngineSpec,
+        ClickHouseEngineSpec,
+    )
+
+    spec = (
+        ClickHouseEngineSpec if engine == "clickhouse" else ClickHouseConnectEngineSpec
+    )
+    error = Exception(
+        "Code: 36. DB::Exception: Another validation error\n"
+        "[SQL: SELECT 'doesn''t look like datepart name in dateTrunc']"
+    )
+
+    assert spec.extract_error_message(error) == f"{engine} error: {error}"
+
+
 @pytest.mark.parametrize(
     "target_type,expected_result",
     [

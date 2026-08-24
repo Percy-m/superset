@@ -17,9 +17,14 @@
 
 
 import hashlib
+from unittest.mock import patch
 
 from superset.utils import json
-from superset.utils.log import collect_request_payload, get_logger_from_status
+from superset.utils.log import (
+    collect_request_payload,
+    DBEventLogger,
+    get_logger_from_status,
+)
 from tests.integration_tests.test_app import app
 
 
@@ -84,6 +89,126 @@ def test_sqllab_post_log_payload_sanitizes_invalid_inputs() -> None:
             "path": "/sqllab/",
             "sql_navigation_status": expected_status,
         }
+
+
+def test_sqllab_execute_log_payload_excludes_query_and_tokens() -> None:
+    sql = "SELECT 'execution-secret 数据质量🙂'"
+    with app.test_request_context(
+        "/api/v1/sqllab/execute/?sql=query-secret",
+        method="POST",
+        json={
+            "database_id": 7,
+            "sql": sql,
+            "runAsync": False,
+            "queryLimit": 1000,
+            "select_as_cta": False,
+            "schema": "private_schema",
+            "templateParams": '{"token": "template-secret"}',
+            "guest_token": "guest-secret",
+        },
+    ) as request_context:
+        request_context.match_request()
+        payload = collect_request_payload()
+
+    assert payload == {
+        "path": "/api/v1/sqllab/execute/",
+        "database_id": 7,
+        "runAsync": False,
+        "queryLimit": 1000,
+        "select_as_cta": False,
+        "sql_execution_payload_status": "accepted",
+        "sql_character_count": len(sql),
+        "sql_utf8_byte_count": len(sql.encode("utf-8")),
+        "sql_sha256_prefix": hashlib.sha256(sql.encode("utf-8")).hexdigest()[:12],
+    }
+
+
+def test_sqllab_execute_log_payload_sanitizes_invalid_inputs() -> None:
+    cases: tuple[tuple[object, dict[str, object]], ...] = (
+        (
+            {"database_id": 7, "runAsync": True, "queryLimit": 50},
+            {
+                "database_id": 7,
+                "runAsync": True,
+                "queryLimit": 50,
+                "sql_execution_payload_status": "missing_sql",
+            },
+        ),
+        (["not", "an", "object"], {"sql_execution_payload_status": "invalid_payload"}),
+    )
+
+    for json_payload, expected_diagnostics in cases:
+        with app.test_request_context(
+            "/api/v1/sqllab/execute/?sql=query-secret",
+            method="POST",
+            json=json_payload,
+        ) as request_context:
+            request_context.match_request()
+            payload = collect_request_payload()
+
+        assert payload == {
+            "path": "/api/v1/sqllab/execute/",
+            **expected_diagnostics,
+        }
+
+
+def test_sqllab_execute_log_preserves_curated_payload_contract() -> None:
+    with (
+        app.test_request_context(
+            "/api/v1/sqllab/execute/",
+            method="POST",
+            json={
+                "database_id": 7,
+                "sql": "SELECT 1",
+                "runAsync": False,
+                "queryLimit": 1000,
+                "select_as_cta": False,
+            },
+        ) as request_context,
+        patch.object(DBEventLogger, "log") as log,
+    ):
+        request_context.match_request()
+        DBEventLogger().log_with_context(
+            action="sqllab.execute",
+            log_to_statsd=False,
+        )
+
+    assert log.call_args.kwargs["curated_payload"] == {
+        "runAsync": False,
+        "queryLimit": 1000,
+        "select_as_cta": False,
+    }
+
+
+def test_sqllab_diagnostics_reject_invalid_unicode_without_raising() -> None:
+    with app.test_request_context(
+        "/api/v1/sqllab/execute/",
+        method="POST",
+        data=b'{"database_id":7,"sql":"\\ud800","runAsync":false}',
+        content_type="application/json",
+    ) as request_context:
+        request_context.match_request()
+        execute_payload = collect_request_payload()
+
+    assert execute_payload == {
+        "path": "/api/v1/sqllab/execute/",
+        "database_id": 7,
+        "runAsync": False,
+        "sql_execution_payload_status": "invalid_sql_encoding",
+    }
+
+    with app.test_request_context(
+        "/sqllab/",
+        method="POST",
+        data={"form_data": '{"sql":"\\ud800"}'},
+    ) as request_context:
+        request_context.match_request()
+        navigation_payload = collect_request_payload()
+
+    assert navigation_payload == {
+        "path": "/sqllab/",
+        "sql_navigation_status": "invalid_sql_encoding",
+    }
 
 
 def test_sqllab_get_log_payload_keeps_legacy_collection_behavior() -> None:

@@ -51,13 +51,61 @@ def _get_sqllab_navigation_diagnostics(
     if not isinstance(sql, str):
         return {"sql_navigation_status": "missing_sql"}
 
-    encoded_sql = sql.encode("utf-8")
+    try:
+        encoded_sql = sql.encode("utf-8")
+    except UnicodeEncodeError:
+        return {"sql_navigation_status": "invalid_sql_encoding"}
     return {
         "sql_navigation_status": "accepted",
         "sql_character_count": len(sql),
         "sql_utf8_byte_count": len(encoded_sql),
         "sql_sha256_prefix": hashlib.sha256(encoded_sql).hexdigest()[:12],
     }
+
+
+def _get_sqllab_execute_diagnostics(
+    json_payload: Any,
+) -> dict[str, str | int | bool]:
+    """Return non-sensitive diagnostics for a SQL Lab execution request."""
+    if not isinstance(json_payload, dict):
+        return {"sql_execution_payload_status": "invalid_payload"}
+
+    diagnostics: dict[str, str | int | bool] = {}
+    database_id = json_payload.get("database_id")
+    if isinstance(database_id, int) and not isinstance(database_id, bool):
+        diagnostics["database_id"] = database_id
+
+    run_async = json_payload.get("runAsync")
+    if isinstance(run_async, bool):
+        diagnostics["runAsync"] = run_async
+
+    query_limit = json_payload.get("queryLimit")
+    if isinstance(query_limit, int) and not isinstance(query_limit, bool):
+        diagnostics["queryLimit"] = query_limit
+
+    select_as_cta = json_payload.get("select_as_cta")
+    if isinstance(select_as_cta, bool):
+        diagnostics["select_as_cta"] = select_as_cta
+
+    sql = json_payload.get("sql")
+    if not isinstance(sql, str):
+        diagnostics["sql_execution_payload_status"] = "missing_sql"
+        return diagnostics
+
+    try:
+        encoded_sql = sql.encode("utf-8")
+    except UnicodeEncodeError:
+        diagnostics["sql_execution_payload_status"] = "invalid_sql_encoding"
+        return diagnostics
+    diagnostics.update(
+        {
+            "sql_execution_payload_status": "accepted",
+            "sql_character_count": len(sql),
+            "sql_utf8_byte_count": len(encoded_sql),
+            "sql_sha256_prefix": hashlib.sha256(encoded_sql).hexdigest()[:12],
+        }
+    )
+    return diagnostics
 
 
 def collect_request_payload() -> dict[str, Any]:
@@ -72,7 +120,14 @@ def collect_request_payload() -> dict[str, Any]:
         **request.args.to_dict(),
     }
 
-    if request.is_json:
+    if (
+        request.method == "POST"
+        and request.endpoint == "SqlLabRestApi.execute_sql_query"
+    ):
+        json_payload = request.get_json(cache=True, silent=True)
+        payload = {"path": request.path}
+        payload.update(_get_sqllab_execute_diagnostics(json_payload))
+    elif request.is_json:
         json_payload = request.get_json(cache=True, silent=True) or {}
         payload.update(json_payload)
 
