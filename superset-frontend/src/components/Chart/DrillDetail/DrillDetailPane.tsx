@@ -87,7 +87,7 @@ type ConfigurableDrillFormData = QueryFormData & {
 function Resizable({ children }: { children: ReactElement }) {
   const { ref, height } = useResizeDetector();
   return (
-    <div ref={ref} css={{ flex: 1 }}>
+    <div ref={ref} css={{ flex: 1, minHeight: 0 }}>
       {cloneElement(children, { height })}
     </div>
   );
@@ -443,7 +443,7 @@ export default function DrillDetailPane({
           columns={mappedColumns}
           size={TableSize.Small}
           defaultPageSize={pageLength}
-          recordCount={detailMode === 'server' ? resultsPage?.total : undefined}
+          recordCount={visibleTotal}
           usePagination
           loading={isLoading}
           onChange={

@@ -36,6 +36,13 @@ import chartQueries, { sliceId } from 'spec/fixtures/mockChartQueries';
 import { supersetGetCache } from 'src/utils/cachedSupersetGet';
 import DrillDetailPane from './DrillDetailPane';
 
+jest.mock('react-resize-detector', () => ({
+  useResizeDetector: (options?: { onResize?: unknown }) => ({
+    ref: { current: null },
+    ...(options?.onResize ? {} : { height: 350 }),
+  }),
+}));
+
 const chart = chartQueries[sliceId];
 type DrillDetailPaneProps = ComponentProps<typeof DrillDetailPane>;
 
@@ -361,6 +368,50 @@ test('bounded-client mode searches all loaded columns without another request', 
   userEvent.type(search, 'Beta');
 
   expect(await screen.findByText('1 row')).toBeInTheDocument();
+  expect(
+    fetchMock.callHistory.calls(
+      'glob:*/datasource/samples*detail_mode=bounded_client*',
+    ),
+  ).toHaveLength(1);
+});
+
+test('bounded-client mode paginates loaded rows without another request', async () => {
+  window.featureFlags = {
+    [FeatureFlag.DrillDetailConfigurableTable]: true,
+  };
+  setupDatasetEndpoint();
+  const data = Array.from({ length: 26 }, (_, index) => ({
+    customer_name: `Customer ${index + 1}`,
+  }));
+  fetchMock.post('glob:*/datasource/samples*detail_mode=bounded_client*', {
+    result: {
+      total_count: data.length,
+      rowcount: data.length,
+      data,
+      colnames: ['customer_name'],
+      coltypes: [GenericDataType.String],
+    },
+  });
+  const formData = {
+    ...chart.form_data,
+    viz_type: 'table',
+    query_mode: QueryMode.Aggregate,
+    metrics: ['sum__num'],
+    drill_detail_server_pagination: false,
+    drill_detail_client_page_length: 25,
+  } as unknown as QueryFormData;
+
+  const { container } = setup({ formData });
+  expect(await screen.findByText('26 rows')).toBeInTheDocument();
+  expect(container.querySelector('.virtual-grid')).toHaveStyle({
+    height: '242px',
+  });
+  expect(screen.getByText('Customer 1')).toBeInTheDocument();
+  expect(screen.queryByText('Customer 26')).not.toBeInTheDocument();
+
+  userEvent.click(screen.getByTitle('2'));
+
+  expect(await screen.findByText('Customer 26')).toBeInTheDocument();
   expect(
     fetchMock.callHistory.calls(
       'glob:*/datasource/samples*detail_mode=bounded_client*',
