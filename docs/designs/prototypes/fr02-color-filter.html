@@ -1,0 +1,2254 @@
+<!doctype html>
+<!--
+Licensed to the Apache Software Foundation (ASF) under one
+or more contributor license agreements. See the NOTICE file
+distributed with this work for additional information
+regarding copyright ownership. The ASF licenses this file
+to you under the Apache License, Version 2.0 (the
+"License"); you may not use this file except in compliance
+with the License. You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing,
+software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+KIND, either express or implied. See the License for the
+specific language governing permissions and limitations
+under the License.
+-->
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FR-02 · Alert filter 交互设计预览</title>
+    <style>
+      :root {
+        --primary: #2893b3;
+        --success: #52c41a;
+        --alert: #faad14;
+        --error: #ff4d4f;
+        --text: #252a2e;
+        --muted: #737b82;
+        --border: #e2e5e8;
+        --canvas: #f7f8fa;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        color: var(--text);
+        background: var(--canvas);
+        font:
+          14px/1.5 Inter,
+          -apple-system,
+          BlinkMacSystemFont,
+          'Helvetica Neue',
+          Helvetica,
+          Arial,
+          sans-serif;
+      }
+      button,
+      input,
+      select {
+        font: inherit;
+        color: inherit;
+      }
+      button {
+        cursor: pointer;
+      }
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.45;
+      }
+      button,
+      input,
+      select {
+        -webkit-tap-highlight-color: transparent;
+      }
+      button:focus-visible,
+      input:focus-visible,
+      select:focus-visible,
+      a:focus-visible {
+        outline: 2px solid var(--primary);
+        outline-offset: 3px;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      .prototype-strip {
+        min-height: 42px;
+        display: flex;
+        gap: 16px;
+        align-items: center;
+        flex-wrap: wrap;
+        padding: 7px 20px;
+        background: #f0f2f4;
+        border-bottom: 1px solid #d8dde1;
+        color: #58616a;
+        font-size: 12px;
+      }
+      .prototype-label {
+        font-weight: 650;
+        letter-spacing: 0.02em;
+        color: #3d454c;
+      }
+      .prototype-scenes {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        flex-wrap: wrap;
+        margin-left: auto;
+      }
+      .scene {
+        border: 1px solid transparent;
+        border-radius: 4px;
+        background: transparent;
+        padding: 2px 8px;
+        font-size: 12px;
+      }
+      .scene[aria-pressed='true'] {
+        border-color: #c3cbd2;
+        background: #fff;
+        color: #252a2e;
+      }
+      .topbar {
+        height: 60px;
+        background: #fff;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        padding: 0 24px;
+        gap: 30px;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 154px;
+        font-size: 22px;
+        font-weight: 700;
+        letter-spacing: -0.7px;
+      }
+      .brand svg {
+        color: var(--primary);
+      }
+      .topnav {
+        display: flex;
+        gap: 28px;
+        color: #626b72;
+        font-size: 14px;
+      }
+      .topnav span:nth-child(2) {
+        color: #20262c;
+      }
+      .topbar-right {
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 23px;
+        color: #626b72;
+      }
+      .avatar {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        background: #edf0f2;
+        display: grid;
+        place-items: center;
+        font-size: 11px;
+        color: #53616b;
+      }
+      .titlebar {
+        height: 64px;
+        background: #fff;
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        border-bottom: 1px solid var(--border);
+        padding: 0 24px;
+      }
+      .chart-title {
+        font-size: 18px;
+        font-weight: 600;
+      }
+      .chart-badge {
+        font-size: 11px;
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 1px 6px;
+        color: var(--muted);
+      }
+      .title-actions {
+        margin-left: auto;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        height: 32px;
+        padding: 0 13px;
+        background: #fff;
+        border: 1px solid #cdd3d8;
+        border-radius: 6px;
+        font-weight: 500;
+        white-space: nowrap;
+      }
+      .button.primary {
+        color: #fff;
+        background: var(--primary);
+        border-color: var(--primary);
+      }
+      .button.ghost {
+        border-color: transparent;
+        color: #657078;
+        background: transparent;
+      }
+      .button:hover:not(:disabled) {
+        border-color: var(--primary);
+      }
+      .workspace {
+        display: grid;
+        grid-template-columns: 235px 300px minmax(0, 1fr);
+        min-height: calc(100vh - 166px);
+      }
+      .source,
+      .controls {
+        min-width: 0;
+        background: #fff;
+        border-right: 1px solid var(--border);
+      }
+      .source {
+        padding: 19px 16px;
+      }
+      .section-kicker {
+        margin: 0 0 14px;
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.03em;
+      }
+      .dataset-card {
+        border: 1px solid var(--border);
+        padding: 10px 11px;
+        border-radius: 6px;
+        margin-bottom: 17px;
+      }
+      .dataset-name {
+        font-weight: 550;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .subtle {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .dataset-meta {
+        margin-top: 5px;
+        display: flex;
+        gap: 8px;
+      }
+      .search-like {
+        height: 32px;
+        border: 1px solid #d9dde1;
+        border-radius: 6px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 9px;
+        color: #9ba1a6;
+        margin-bottom: 21px;
+      }
+      .source-heading {
+        font-size: 12px;
+        color: #79828a;
+        margin: 21px 0 9px;
+        display: flex;
+        justify-content: space-between;
+      }
+      .field-list {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+      }
+      .field-list li {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        padding: 7px 2px;
+      }
+      .field-type {
+        color: #7a848d;
+        width: 20px;
+        text-align: center;
+        font-size: 12px;
+      }
+      .field-list li span:last-child {
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .control-tabs {
+        display: flex;
+        padding: 0 18px;
+        height: 48px;
+        border-bottom: 1px solid var(--border);
+        gap: 24px;
+      }
+      .control-tab {
+        height: 48px;
+        display: flex;
+        align-items: center;
+        font-weight: 550;
+        color: #838a91;
+        border-bottom: 2px solid transparent;
+      }
+      .control-tab.active {
+        color: var(--primary);
+        border-bottom-color: var(--primary);
+      }
+      .control-scroll {
+        padding: 17px 16px 30px;
+      }
+      .control-section-title {
+        font-size: 13px;
+        font-weight: 650;
+        margin-bottom: 17px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .field-label {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 13px;
+        margin-bottom: 6px;
+        font-weight: 500;
+      }
+      .info {
+        display: inline-grid;
+        place-items: center;
+        width: 12px;
+        height: 12px;
+        border: 1px solid #a9b1b7;
+        border-radius: 50%;
+        font-size: 9px;
+        color: #89939b;
+        font-weight: 400;
+      }
+      .control-select {
+        display: flex;
+        justify-content: space-between;
+        height: 32px;
+        align-items: center;
+        border: 1px solid #d9dde1;
+        border-radius: 6px;
+        padding: 0 10px;
+        font-size: 13px;
+        margin-bottom: 17px;
+      }
+      .simple-check {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        margin-bottom: 13px;
+      }
+      input[type='checkbox'] {
+        accent-color: var(--primary);
+        width: 15px;
+        height: 15px;
+        margin: 0;
+      }
+      .section-divider {
+        border: 0;
+        border-top: 1px solid var(--border);
+        margin: 20px -16px;
+      }
+      .formatting-label {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        margin-bottom: 9px;
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .rule-list {
+        padding: 5px;
+        border: 1px solid var(--border);
+        border-radius: 5px;
+      }
+      .rule-card {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        padding: 8px 7px;
+        border: 1px solid #dfe3e7;
+        border-radius: 4px;
+        background: #fafbfc;
+        font-size: 12px;
+        margin-bottom: 5px;
+        text-align: left;
+      }
+      .rule-card:hover {
+        border-color: #aab9c4;
+        background: #fff;
+      }
+      .rule-card-text {
+        min-width: 0;
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .rule-card .rule-toggle-indicator {
+        display: flex;
+        align-items: center;
+        color: #747e87;
+      }
+      .rule-card .rule-toggle-indicator.enabled {
+        color: var(--primary);
+      }
+      .rule-chip {
+        width: 10px;
+        height: 10px;
+        border-radius: 2px;
+        flex-shrink: 0;
+      }
+      .add-formatter {
+        width: 100%;
+        border: none;
+        background: transparent;
+        padding: 7px 3px;
+        text-align: left;
+        color: #64727b;
+        font-size: 12px;
+      }
+      .small-note {
+        color: #858c93;
+        font-size: 11px;
+        line-height: 1.65;
+        margin: 10px 0 0;
+      }
+      .preview {
+        min-width: 0;
+        padding: 20px 20px 28px;
+      }
+      .preview-heading {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 17px;
+        gap: 10px;
+      }
+      .preview-heading h1 {
+        font-size: 15px;
+        font-weight: 600;
+        margin: 0;
+      }
+      .preview-metadata {
+        color: #8d969c;
+        font-size: 12px;
+        display: flex;
+        align-items: center;
+        gap: 7px;
+      }
+      .status-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #829d8b;
+        display: inline-block;
+      }
+      .chart-canvas {
+        min-height: 455px;
+        background: #fff;
+        border: 1px solid var(--border);
+        border-radius: 5px;
+        padding: 19px 17px 14px;
+      }
+      .canvas-toolbar {
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        align-items: center;
+        margin-bottom: 12px;
+        min-height: 32px;
+      }
+      .canvas-toolbar .table-title {
+        font-size: 14px;
+        font-weight: 550;
+      }
+      .search-box {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        color: #747d85;
+        font-size: 12px;
+      }
+      .search-box input {
+        width: 130px;
+        height: 30px;
+        border: 1px solid #d4d9df;
+        border-radius: 5px;
+        padding: 0 8px;
+        font-size: 12px;
+      }
+      .active-filters {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
+        margin: 0 0 11px;
+        min-height: 24px;
+        font-size: 11px;
+      }
+      .filter-tag {
+        border: 1px solid #d7dee3;
+        border-radius: 4px;
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        padding: 2px 6px;
+        background: #fbfcfd;
+      }
+      .tag-dismiss {
+        border: 0;
+        background: none;
+        padding: 0 1px;
+        color: #75818b;
+        font-size: 14px;
+        line-height: 18px;
+      }
+      .clear-link {
+        border: 0;
+        background: none;
+        color: var(--primary);
+        padding: 1px 3px;
+        font-size: 12px;
+      }
+      .table-scroll {
+        overflow-x: auto;
+        min-height: 270px;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        min-width: 608px;
+        table-layout: auto;
+        font-size: 12px;
+      }
+      th,
+      td {
+        border-bottom: 1px solid #e8ebee;
+        height: 31px;
+        padding: 5px 8px;
+        white-space: nowrap;
+      }
+      th {
+        color: #4a545d;
+        font-weight: 600;
+        height: 34px;
+        text-align: left;
+        border-top: 1px solid #e4e8eb;
+        background: #fcfcfd;
+      }
+      th.numeric,
+      td.numeric {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      tbody tr:nth-child(even) {
+        background: #fafbfc;
+      }
+      tbody tr:hover {
+        box-shadow: inset 0 0 0 9999px #00000003;
+      }
+      td {
+        position: relative;
+      }
+      .cell-value {
+        position: relative;
+        z-index: 1;
+      }
+      .cell-bar {
+        position: absolute;
+        top: 1px;
+        bottom: 1px;
+        left: 0;
+        opacity: 0.55;
+      }
+      .header-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .sort-hint {
+        font-size: 10px;
+        color: #bac1c7;
+        margin-left: 3px;
+      }
+      .filter-button {
+        border: none;
+        background: transparent;
+        height: 23px;
+        width: 24px;
+        display: inline-grid;
+        place-items: center;
+        border-radius: 4px;
+        color: #88919a;
+        padding: 2px;
+        margin-left: 1px;
+      }
+      .filter-button:hover,
+      .filter-button[aria-expanded='true'] {
+        background: #eaf0f3;
+        color: var(--primary);
+      }
+      .filter-button.selected {
+        color: var(--primary);
+        background: #edf6f8;
+      }
+      .table-footer {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 12px;
+        padding-top: 15px;
+        font-size: 12px;
+        color: #76818a;
+      }
+      .pagination {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .page-button {
+        height: 27px;
+        min-width: 27px;
+        border: 1px solid transparent;
+        border-radius: 4px;
+        background: #fff;
+        font-size: 12px;
+      }
+      .page-button.current {
+        color: var(--primary);
+        border-color: var(--primary);
+      }
+      .page-size {
+        border: 1px solid #d9dfe4;
+        border-radius: 5px;
+        height: 27px;
+        background: #fff;
+        margin-left: 6px;
+        font-size: 12px;
+      }
+      .preview-caption {
+        font-size: 12px;
+        color: #7d8790;
+        line-height: 1.8;
+        margin: 13px 2px 0;
+      }
+      .empty-cell {
+        text-align: center;
+        height: 226px;
+        color: #818b94;
+        white-space: normal;
+      }
+      .empty-title {
+        display: block;
+        color: #596570;
+        margin-bottom: 6px;
+        font-size: 14px;
+      }
+      .chart-state {
+        min-height: 358px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 14px;
+        color: #79838b;
+        text-align: center;
+      }
+      .chart-state strong {
+        color: #4c5760;
+        font-weight: 550;
+      }
+      .spinner {
+        width: 28px;
+        height: 28px;
+        border: 2px solid #e5ecef;
+        border-top-color: var(--primary);
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      .error-symbol {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        border: 1px solid #d2d8dd;
+        display: grid;
+        place-items: center;
+        color: #81909b;
+        font-size: 20px;
+      }
+      .overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 90;
+        background: transparent;
+      }
+      .formatter-dialog {
+        position: fixed;
+        z-index: 100;
+        width: 450px;
+        max-width: calc(100vw - 24px);
+        max-height: calc(100vh - 30px);
+        overflow-y: auto;
+        background: #fff;
+        border-radius: 7px;
+        border: 1px solid #e4e7ea;
+        box-shadow:
+          0 9px 34px #172d452b,
+          0 2px 8px #172d4514;
+      }
+      .dialog-heading {
+        padding: 15px 19px 12px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        border-bottom: 1px solid #edf0f2;
+      }
+      .dialog-heading h2 {
+        margin: 0;
+        font-size: 14px;
+        font-weight: 600;
+      }
+      .close-dialog {
+        border: 0;
+        background: none;
+        padding: 0 2px;
+        color: #818b92;
+        font-size: 21px;
+        line-height: 20px;
+      }
+      .formatter-form {
+        padding: 17px 19px 16px;
+      }
+      .form-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 14px;
+        margin-bottom: 16px;
+      }
+      .form-field {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .form-field label {
+        font-size: 13px;
+        font-weight: 500;
+      }
+      .form-field select,
+      .form-field input {
+        width: 100%;
+        min-width: 0;
+        height: 32px;
+        background: #fff;
+        border: 1px solid #d5dbe0;
+        border-radius: 6px;
+        padding: 0 9px;
+        font-size: 13px;
+      }
+      .form-row.range-row {
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 10px;
+      }
+      .gradient-row {
+        margin: -1px 0 16px;
+      }
+      .enable-filter-row {
+        border-top: 1px solid #eef0f2;
+        padding-top: 14px;
+        margin: 4px 0 18px;
+      }
+      .enable-filter-row label {
+        font-size: 13px;
+        font-weight: 500;
+      }
+      .enable-filter-help {
+        margin: 5px 0 0 23px;
+        font-size: 11px;
+        color: #85909a;
+        line-height: 1.65;
+      }
+      .gradient-warning {
+        background: #fffbe6;
+        border: 1px solid #ffe58f;
+        border-radius: 5px;
+        padding: 9px 10px;
+        color: #8a671a;
+        font-size: 11px;
+        line-height: 1.7;
+        margin: 9px 0 0;
+      }
+      .gradient-column-notice {
+        margin: 0 0 12px;
+      }
+      .menu-gradient-warning {
+        margin: 0 3px 7px;
+        font-size: 11px;
+      }
+      .dialog-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+      .form-error {
+        margin: 0 0 10px;
+        color: #ce4143;
+        font-size: 12px;
+      }
+      .color-popover {
+        position: fixed;
+        z-index: 80;
+        width: 208px;
+        background: #fff;
+        border: 1px solid #e0e5e9;
+        border-radius: 7px;
+        box-shadow:
+          0 6px 22px #21374925,
+          0 2px 4px #2137490d;
+        padding: 7px;
+      }
+      .menu-title {
+        font-size: 11px;
+        color: #89949d;
+        padding: 4px 8px 8px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .color-option {
+        display: flex;
+        align-items: center;
+        gap: 11px;
+        width: 100%;
+        min-height: 34px;
+        border: none;
+        background: #fff;
+        border-radius: 4px;
+        padding: 6px 9px;
+        text-align: left;
+        font-size: 12px;
+      }
+      .color-option:hover,
+      .color-option:focus-visible {
+        background: #f3f6f8;
+      }
+      .color-option[aria-checked='true'] {
+        background: #f0f6f8;
+      }
+      .color-swatch {
+        display: inline-block;
+        flex-shrink: 0;
+        width: 20px;
+        height: 14px;
+        border-radius: 3px;
+        box-shadow: inset 0 0 0 1px #00000009;
+      }
+      .color-option .selection-check {
+        margin-left: auto;
+        color: var(--primary);
+        font-weight: 700;
+      }
+      .color-option .option-count {
+        font-size: 11px;
+        color: #9aa3aa;
+        margin-left: auto;
+      }
+      .menu-footer {
+        border-top: 1px solid #ebeff2;
+        margin-top: 6px;
+        padding: 7px 7px 1px;
+      }
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
+      @media (max-width: 1150px) {
+        .workspace {
+          grid-template-columns: 195px 278px minmax(0, 1fr);
+        }
+        .source {
+          padding: 19px 12px;
+        }
+        .preview {
+          padding: 18px 14px;
+        }
+        .chart-canvas {
+          padding: 16px 12px;
+        }
+        .topnav {
+          gap: 18px;
+        }
+      }
+      @media (max-width: 960px) {
+        .workspace {
+          grid-template-columns: 278px minmax(0, 1fr);
+        }
+        .source {
+          display: none;
+        }
+        .topbar {
+          padding: 0 16px;
+          gap: 14px;
+        }
+        .brand {
+          min-width: 130px;
+          font-size: 20px;
+        }
+        .topnav {
+          gap: 14px;
+          font-size: 12px;
+        }
+        .topbar-right {
+          gap: 10px;
+          font-size: 12px;
+        }
+      }
+      @media (max-width: 710px) {
+        .prototype-strip {
+          gap: 5px 10px;
+          padding: 7px 12px;
+        }
+        .prototype-scenes {
+          margin-left: 0;
+          width: 100%;
+        }
+        .topbar {
+          height: 52px;
+        }
+        .topnav {
+          display: none;
+        }
+        .titlebar {
+          padding: 0 12px;
+          height: 60px;
+          gap: 8px;
+        }
+        .chart-title {
+          font-size: 14px;
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .chart-badge,
+        .title-actions .ghost {
+          display: none;
+        }
+        .title-actions .button {
+          padding: 0 8px;
+          font-size: 12px;
+        }
+        .workspace {
+          display: flex;
+          flex-direction: column;
+        }
+        .controls {
+          border-right: 0;
+          border-bottom: 1px solid var(--border);
+        }
+        .control-scroll {
+          max-height: 278px;
+          overflow-y: auto;
+          padding-top: 12px;
+        }
+        .control-scroll > .control-section-title:first-child,
+        .basic-controls,
+        .control-scroll > .section-divider {
+          display: none;
+        }
+        .control-tabs {
+          height: 42px;
+        }
+        .control-tab {
+          height: 42px;
+        }
+        .preview {
+          padding: 16px 12px;
+        }
+        .preview-metadata {
+          font-size: 10px;
+        }
+        .canvas-toolbar {
+          align-items: flex-start;
+        }
+        .search-box {
+          flex-wrap: wrap;
+          justify-content: flex-end;
+          gap: 4px;
+        }
+        .search-box input {
+          width: 106px;
+        }
+        .table-footer {
+          font-size: 11px;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .spinner {
+          animation: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <aside class="prototype-strip" aria-label="设计预览工具，不属于产品界面">
+      <span class="prototype-label">设计预览</span>
+      <span>示例数据 · 未接入后端</span>
+      <div class="prototype-scenes" aria-label="预览场景">
+        <span>场景</span>
+        <button
+          class="scene"
+          type="button"
+          data-scene="default"
+          aria-pressed="true"
+        >
+          默认
+        </button>
+        <button
+          class="scene"
+          type="button"
+          data-scene="configure"
+          aria-pressed="false"
+        >
+          配置
+        </button>
+        <button
+          class="scene"
+          type="button"
+          data-scene="green"
+          aria-pressed="false"
+        >
+          绿
+        </button>
+        <button
+          class="scene"
+          type="button"
+          data-scene="multiple"
+          aria-pressed="false"
+        >
+          多色
+        </button>
+        <button
+          class="scene"
+          type="button"
+          data-scene="empty"
+          aria-pressed="false"
+        >
+          无结果
+        </button>
+        <button
+          class="scene"
+          type="button"
+          data-scene="gradient"
+          aria-pressed="false"
+        >
+          渐变不支持
+        </button>
+        <button
+          class="scene"
+          type="button"
+          data-scene="loading"
+          aria-pressed="false"
+        >
+          加载
+        </button>
+        <button
+          class="scene"
+          type="button"
+          data-scene="error"
+          aria-pressed="false"
+        >
+          失败
+        </button>
+      </div>
+    </aside>
+    <header class="topbar">
+      <div class="brand">
+        <svg
+          width="30"
+          height="24"
+          viewBox="0 0 34 26"
+          fill="none"
+          aria-hidden="true"
+        >
+          <path
+            d="M2 17.5C7 3 14 3 20 15.5S30 20 32 8.5M2 8.5C7 23 14 23 20 10.5S30 6 32 17.5"
+            stroke="currentColor"
+            stroke-width="3.2"
+            stroke-linecap="round"
+          /></svg
+        ><span>superset</span>
+      </div>
+      <nav class="topnav" aria-label="主导航示意">
+        <span>Dashboards</span><span>Charts</span><span>Datasets</span
+        ><span>SQL⌄</span>
+      </nav>
+      <div class="topbar-right">
+        <span>Settings⌄</span
+        ><span class="avatar" aria-label="用户示意">AD</span>
+      </div>
+    </header>
+    <div class="titlebar">
+      <span class="chart-title">Sales quality overview</span
+      ><span class="chart-badge">Table</span>
+      <div class="title-actions">
+        <span class="subtle">Draft</span
+        ><button
+          type="button"
+          class="button ghost"
+          disabled
+          aria-label="原型不执行保存"
+        >
+          Save</button
+        ><button type="button" class="button primary" id="update-chart">
+          Update chart
+        </button>
+      </div>
+    </div>
+    <main class="workspace">
+      <aside class="source" aria-label="Chart source">
+        <h2 class="section-kicker">CHART SOURCE</h2>
+        <div class="dataset-card">
+          <div class="dataset-name">▦ &nbsp;sales_quality_demo</div>
+          <div class="dataset-meta">
+            <span class="subtle">Physical dataset</span
+            ><span class="subtle">⋯</span>
+          </div>
+        </div>
+        <div class="search-like" aria-hidden="true">
+          ⌕ &nbsp; Search metrics &amp; columns
+        </div>
+        <div class="source-heading"><span>METRICS</span><span>2</span></div>
+        <ul class="field-list">
+          <li><span class="field-type">ƒ</span><span>SUM(revenue)</span></li>
+          <li>
+            <span class="field-type">ƒ</span><span>SUM(gross_profit)</span>
+          </li>
+        </ul>
+        <div class="source-heading"><span>COLUMNS</span><span>6</span></div>
+        <ul class="field-list">
+          <li><span class="field-type">ABC</span><span>region</span></li>
+          <li><span class="field-type">ABC</span><span>category</span></li>
+          <li><span class="field-type">#</span><span>revenue</span></li>
+          <li><span class="field-type">#</span><span>gross_profit</span></li>
+          <li><span class="field-type">#</span><span>orders</span></li>
+          <li><span class="field-type">#</span><span>quality_score</span></li>
+        </ul>
+      </aside>
+      <section class="controls" aria-label="Chart controls">
+        <div class="control-tabs">
+          <span class="control-tab">Data</span
+          ><span class="control-tab active">Customize</span>
+        </div>
+        <div class="control-scroll">
+          <div class="control-section-title">⌄ &nbsp; Table options</div>
+          <div class="basic-controls">
+            <div class="field-label">
+              Page length <span class="info" aria-hidden="true">i</span>
+            </div>
+            <div class="control-select"><span>10</span><span>⌄</span></div>
+            <label class="simple-check"
+              ><input type="checkbox" checked disabled /> Include search</label
+            ><label class="simple-check"
+              ><input type="checkbox" disabled /> Show totals</label
+            >
+          </div>
+          <hr class="section-divider" />
+          <div class="control-section-title">⌄ &nbsp; Visual formatting</div>
+          <div class="formatting-label">
+            Custom conditional formatting
+            <span class="info" aria-hidden="true">i</span>
+          </div>
+          <div class="rule-list" id="rule-list"></div>
+          <p class="small-note">
+            点击规则编辑。Enable alert filter
+            只控制该规则目标列的筛选入口，不改变配色。
+          </p>
+        </div>
+      </section>
+      <section class="preview" aria-label="Table preview">
+        <div class="preview-heading">
+          <h1>Chart preview</h1>
+          <span class="preview-metadata"
+            ><span class="status-dot"></span>16 rows · Example data</span
+          >
+        </div>
+        <div class="chart-canvas">
+          <div class="canvas-toolbar">
+            <span class="table-title">Sales quality overview</span
+            ><label class="search-box"
+              >Search
+              <input
+                id="table-search"
+                type="search"
+                placeholder="16 records…"
+                aria-label="Search demo records"
+            /></label>
+          </div>
+          <div id="active-filters" class="active-filters" hidden></div>
+          <div
+            id="gradient-column-notice"
+            class="gradient-warning gradient-column-notice"
+            role="status"
+            hidden
+          ></div>
+          <div id="table-area"></div>
+        </div>
+        <p class="preview-caption">
+          演示说明：gross_profit
+          负数被配置为绿色。筛选依据实际颜色，不解释业务上的好坏。<br />同列多色取并集，不同列取交集。V1
+          仅支持纯色筛选；含有效渐变规则的目标列会显示明确说明。
+        </p>
+      </section>
+    </main>
+    <div class="overlay" id="dialog-overlay" hidden></div>
+    <section
+      class="formatter-dialog"
+      id="formatter-dialog"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="formatter-title"
+      hidden
+    >
+      <header class="dialog-heading">
+        <h2 id="formatter-title">Edit formatter</h2>
+        <button type="button" class="close-dialog" aria-label="Close formatter">
+          ×
+        </button>
+      </header>
+      <form class="formatter-form" id="formatter-form">
+        <div class="form-row">
+          <div class="form-field">
+            <label for="rule-column">Column</label
+            ><select id="rule-column" name="column"></select>
+          </div>
+          <div class="form-field">
+            <label for="rule-scheme">Color scheme</label
+            ><select id="rule-scheme" name="colorScheme">
+              <option value="success">success</option>
+              <option value="alert">alert</option>
+              <option value="error">error</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-field">
+            <label for="rule-target-column">Formatting column</label
+            ><select id="rule-target-column" name="columnFormatting"></select>
+          </div>
+          <div class="form-field">
+            <label for="rule-object">Formatting object</label
+            ><select id="rule-object" name="objectFormatting">
+              <option value="background">background color</option>
+              <option value="text">text color</option>
+              <option value="bar">cell bar</option>
+            </select>
+          </div>
+        </div>
+        <label class="simple-check gradient-row" id="gradient-row"
+          ><input type="checkbox" id="rule-gradient" name="useGradient" /> Use
+          gradient</label
+        >
+        <div class="form-row" id="operator-row">
+          <div class="form-field">
+            <label for="rule-operator">Operator</label
+            ><select id="rule-operator" name="operator"></select>
+          </div>
+          <div class="form-field" id="target-value-field">
+            <label for="rule-value">Target value</label
+            ><input
+              id="rule-value"
+              name="targetValue"
+              type="number"
+              step="any"
+            />
+          </div>
+          <div class="form-field" id="right-value-field" hidden>
+            <label for="rule-right-value">Right value</label
+            ><input
+              id="rule-right-value"
+              name="targetValueRight"
+              type="number"
+              step="any"
+            />
+          </div>
+        </div>
+        <div class="enable-filter-row">
+          <label class="simple-check"
+            ><input
+              type="checkbox"
+              id="rule-enabled"
+              name="enableAlertFilter"
+              aria-describedby="enable-filter-help gradient-filter-warning"
+            />
+            Enable alert filter</label
+          >
+          <p class="enable-filter-help" id="enable-filter-help">
+            Show a color filter in this rule’s target column.<br />Color scheme
+            remains the only source of color.
+          </p>
+          <p
+            class="gradient-warning"
+            id="gradient-filter-warning"
+            role="status"
+            hidden
+          ></p>
+        </div>
+        <p id="form-error" class="form-error" role="alert" hidden></p>
+        <footer class="dialog-actions">
+          <button type="button" class="button" id="cancel-formatter">
+            Cancel</button
+          ><button type="submit" class="button primary">Apply</button>
+        </footer>
+      </form>
+    </section>
+    <section
+      class="color-popover"
+      id="color-menu"
+      role="menu"
+      aria-label="Filter by color"
+      hidden
+    ></section>
+    <div
+      id="announcement"
+      class="sr-only"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+    ></div>
+    <script>
+      (() => {
+        'use strict';
+        // All rows and controls are deterministic prototype data. No network requests.
+        const palette = {
+          success: { hex: '#52c41a', name: '绿色', rgb: [82, 196, 26] },
+          alert: { hex: '#faad14', name: '黄色', rgb: [250, 173, 20] },
+          error: { hex: '#ff4d4f', name: '红色', rgb: [255, 77, 79] },
+        };
+        const colorOrder = ['success', 'alert', 'error'];
+        const columns = [
+          { key: 'region', numeric: false },
+          { key: 'category', numeric: false },
+          { key: 'revenue', numeric: true },
+          { key: 'gross_profit', numeric: true },
+          { key: 'orders', numeric: true },
+          { key: 'quality_score', numeric: true },
+        ];
+        const rows = [
+          ['华东', 'Electronics', 186400, -12400, 382, 98],
+          ['华南', 'Home', 142800, -8800, 291, 92],
+          ['华北', 'Grocery', 128600, -5400, 517, 96],
+          ['西南', 'Apparel', 98600, -2700, 244, 85],
+          ['华中', 'Electronics', 165200, -1100, 325, 99],
+          ['西北', 'Home', 75400, 800, 188, 76],
+          ['东北', 'Grocery', 82300, 1600, 329, 88],
+          ['华东', 'Apparel', 116800, 2300, 276, 97],
+          ['华南', 'Electronics', 204600, 3500, 413, 72],
+          ['华北', 'Home', 139200, 4700, 306, 90],
+          ['西南', 'Grocery', 94500, 5600, 401, 95],
+          ['华中', 'Apparel', 127800, 7800, 287, 78],
+          ['西北', 'Electronics', 173200, 9400, 352, 87],
+          ['东北', 'Home', 88600, 12800, 217, 98],
+          ['华东', 'Grocery', 153400, 16900, 608, 74],
+          ['华南', 'Apparel', 195600, 21800, 456, 93],
+        ].map((values, index) =>
+          Object.fromEntries([
+            ['id', index + 1],
+            ...columns.map((column, i) => [column.key, values[i]]),
+          ]),
+        );
+        const initialRules = [
+          {
+            id: 1,
+            column: 'gross_profit',
+            scheme: 'success',
+            target: 'gross_profit',
+            object: 'background',
+            gradient: false,
+            operator: '<',
+            value: 0,
+            right: 0,
+            enabled: true,
+          },
+          {
+            id: 2,
+            column: 'gross_profit',
+            scheme: 'alert',
+            target: 'gross_profit',
+            object: 'background',
+            gradient: false,
+            operator: 'between-left',
+            value: 0,
+            right: 5000,
+            enabled: false,
+          },
+          {
+            id: 3,
+            column: 'gross_profit',
+            scheme: 'error',
+            target: 'gross_profit',
+            object: 'background',
+            gradient: false,
+            operator: '≥',
+            value: 5000,
+            right: 0,
+            enabled: false,
+          },
+          {
+            id: 4,
+            column: 'quality_score',
+            scheme: 'success',
+            target: 'quality_score',
+            object: 'background',
+            gradient: false,
+            operator: '≥',
+            value: 95,
+            right: 0,
+            enabled: true,
+          },
+          {
+            id: 5,
+            column: 'quality_score',
+            scheme: 'alert',
+            target: 'quality_score',
+            object: 'background',
+            gradient: false,
+            operator: 'between-left',
+            value: 80,
+            right: 95,
+            enabled: false,
+          },
+          {
+            id: 6,
+            column: 'quality_score',
+            scheme: 'error',
+            target: 'quality_score',
+            object: 'background',
+            gradient: false,
+            operator: '<',
+            value: 80,
+            right: 0,
+            enabled: false,
+          },
+        ];
+        const numberOperators = [
+          ['None', 'None'],
+          ['>', '>'],
+          ['<', '<'],
+          ['≥', '≥'],
+          ['≤', '≤'],
+          ['=', '='],
+          ['≠', '≠'],
+          ['between', '< x <'],
+          ['between-equal', '≤ x ≤'],
+          ['between-left', '≤ x <'],
+          ['between-right', '< x ≤'],
+        ];
+        const stringOperators = [
+          ['None', 'None'],
+          ['=', '='],
+          ['begins', 'begins with'],
+          ['ends', 'ends with'],
+          ['contains', 'containing'],
+          ['not-contains', 'not containing'],
+        ];
+        let rules = initialRules.map(rule => ({ ...rule }));
+        let selections = {};
+        let page = 1;
+        let pageSize = 10;
+        let search = '';
+        let scenario = 'default';
+        let chartState = 'ready';
+        let prepared = [];
+        let catalog = {};
+        let gradientColumns = new Set();
+        let editingId = null;
+        let closingEnabledForGradient = false;
+        let previousFocus = null;
+        let openColumn = null;
+        let menuPosition = null;
+        const byId = id => document.getElementById(id);
+        const escapeHtml = value =>
+          String(value).replace(
+            /[&<>"']/g,
+            char =>
+              ({
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#39;',
+              })[char],
+          );
+        const funnel =
+          '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2 3h12L9.5 8v4.2l-3 1.3V8L2 3Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>';
+        const swatch = (scheme, small = false) =>
+          `<span class="${small ? 'rule-chip' : 'color-swatch'}" style="background:${palette[scheme].hex}" aria-hidden="true"></span>`;
+        const columnNumeric = key =>
+          columns.some(column => column.key === key && column.numeric);
+        const matchesRule = (rule, row) => {
+          const value = row[rule.column];
+          switch (rule.operator) {
+            case 'None':
+              return value !== null && value !== undefined && value !== '';
+            case '>':
+              return value > rule.value;
+            case '<':
+              return value < rule.value;
+            case '≥':
+              return value >= rule.value;
+            case '≤':
+              return value <= rule.value;
+            case '=':
+              return value === rule.value;
+            case '≠':
+              return value !== rule.value;
+            case 'between':
+              return value > rule.value && value < rule.right;
+            case 'between-equal':
+              return value >= rule.value && value <= rule.right;
+            case 'between-left':
+              return value >= rule.value && value < rule.right;
+            case 'between-right':
+              return value > rule.value && value <= rule.right;
+            case 'begins':
+              return String(value).startsWith(rule.value);
+            case 'ends':
+              return String(value).endsWith(rule.value);
+            case 'contains':
+              return String(value)
+                .toLowerCase()
+                .includes(String(rule.value).toLowerCase());
+            case 'not-contains':
+              return !String(value)
+                .toLowerCase()
+                .includes(String(rule.value).toLowerCase());
+            default:
+              return false;
+          }
+        };
+        const ruleOpacity = (rule, row) => {
+          if (
+            !rule.gradient ||
+            rule.object !== 'background' ||
+            !columnNumeric(rule.column)
+          )
+            return 1;
+          const values = rows.map(item => item[rule.column]);
+          const min = Math.min(...values);
+          const max = Math.max(...values);
+          let cutoff = Number(rule.value);
+          let extreme = max;
+          let floor = 0.05;
+          if (rule.operator === 'None') {
+            cutoff = min;
+            extreme = max;
+            floor = 0;
+          } else if (rule.operator === '<' || rule.operator === '≤')
+            extreme = min;
+          else if (rule.operator.startsWith('between')) extreme = rule.right;
+          else if (rule.operator === '=') return 1;
+          else if (rule.operator === '≠')
+            extreme =
+              Math.abs(cutoff - min) > Math.abs(max - cutoff) ? min : max;
+          if (cutoff === extreme) return 1;
+          return Math.min(
+            1,
+            Math.round(
+              (Math.abs(
+                ((1 - floor) * (row[rule.column] - cutoff)) /
+                  (extreme - cutoff),
+              ) +
+                floor) *
+                100,
+            ) / 100,
+          );
+        };
+        const finalColors = style => {
+          const colors = new Set();
+          if (style.background && style.background.alpha > 0)
+            colors.add(style.background.scheme);
+          if (style.text) colors.add(style.text.scheme);
+          if (!style.background && style.bar && style.bar.width > 0)
+            colors.add(style.bar.scheme);
+          return colors;
+        };
+        const prepareColors = () => {
+          // Freeze final painting before applying filters, search, or pagination.
+          const ordered = [
+            ...rules.filter(rule => rule.target !== 'entire row'),
+            ...rules.filter(rule => rule.target === 'entire row'),
+          ];
+          prepared = rows.map(row => {
+            const styles = Object.fromEntries(
+              columns.map(column => [column.key, {}]),
+            );
+            ordered.forEach(rule => {
+              if (!matchesRule(rule, row)) return;
+              const targets =
+                rule.target === 'entire row'
+                  ? columns.map(column => column.key)
+                  : [rule.target];
+              targets.forEach(target => {
+                const style = styles[target];
+                if (!style) return;
+                if (rule.object === 'bar') {
+                  const max = Math.max(
+                    ...rows.map(item => Math.abs(Number(item[target]) || 0)),
+                  );
+                  style.bar = {
+                    scheme: rule.scheme,
+                    width: max
+                      ? (Math.abs(Number(row[target]) || 0) / max) * 100
+                      : 0,
+                  };
+                } else
+                  style[rule.object] = {
+                    scheme: rule.scheme,
+                    alpha: ruleOpacity(rule, row),
+                  };
+              });
+            });
+            return {
+              row,
+              styles,
+              colors: Object.fromEntries(
+                columns.map(column => [
+                  column.key,
+                  finalColors(styles[column.key]),
+                ]),
+              ),
+            };
+          });
+          gradientColumns = new Set(
+            rules
+              .filter(
+                rule =>
+                  rule.gradient &&
+                  rule.object === 'background' &&
+                  columnNumeric(rule.column),
+              )
+              .flatMap(rule =>
+                rule.target === 'entire row'
+                  ? columns.map(column => column.key)
+                  : [rule.target],
+              ),
+          );
+          const enabledTargets = new Set(
+            rules
+              .filter(rule => rule.enabled)
+              .flatMap(rule =>
+                rule.target === 'entire row'
+                  ? columns.map(column => column.key)
+                  : [rule.target],
+              ),
+          );
+          catalog = Object.fromEntries(
+            columns
+              .filter(column => enabledTargets.has(column.key))
+              .map(column => [
+                column.key,
+                colorOrder.filter(scheme =>
+                  prepared.some(item => item.colors[column.key].has(scheme)),
+                ),
+              ]),
+          );
+          Object.keys(selections).forEach(key => {
+            selections[key] = (selections[key] || []).filter(
+              scheme =>
+                !gradientColumns.has(key) &&
+                catalog[key] &&
+                catalog[key].includes(scheme),
+            );
+            if (!selections[key].length) delete selections[key];
+          });
+        };
+        const matchedRows = () =>
+          prepared.filter(
+            item =>
+              Object.entries(selections).every(([column, schemes]) =>
+                schemes.some(scheme => item.colors[column].has(scheme)),
+              ) &&
+              (!search ||
+                columns.some(column =>
+                  String(item.row[column.key]).toLowerCase().includes(search),
+                )),
+          );
+        const ruleDescription = rule =>
+          rule.operator.startsWith('between')
+            ? `${rule.value} ${rule.operator === 'between-left' || rule.operator === 'between-equal' ? '≤' : '<'} ${rule.column} ${rule.operator === 'between-right' || rule.operator === 'between-equal' ? '≤' : '<'} ${rule.right}`
+            : rule.operator === 'None'
+              ? rule.column
+              : `${rule.column} ${rule.operator} ${rule.value}`;
+        const renderRules = () => {
+          byId('rule-list').innerHTML =
+            rules
+              .map(
+                rule =>
+                  `<button type="button" class="rule-card" data-rule-id="${rule.id}" aria-label="Edit formatter: ${escapeHtml(ruleDescription(rule))}" title="${escapeHtml(ruleDescription(rule))}">${swatch(rule.scheme, true)}<span class="rule-card-text">${escapeHtml(ruleDescription(rule))}</span><span class="rule-toggle-indicator ${rule.enabled ? 'enabled' : ''}" title="Alert filter ${rule.enabled ? 'enabled' : 'disabled'}" aria-label="Alert filter ${rule.enabled ? 'enabled' : 'disabled'}">${funnel}</span><span aria-hidden="true">›</span></button>`,
+              )
+              .join('') +
+            '<button type="button" class="add-formatter" id="add-formatter">＋ &nbsp;Add new formatter</button>';
+          byId('rule-list')
+            .querySelectorAll('[data-rule-id]')
+            .forEach(button =>
+              button.addEventListener('click', () =>
+                openFormatter(Number(button.dataset.ruleId), button),
+              ),
+            );
+          byId('add-formatter').addEventListener('click', event =>
+            openFormatter(null, event.currentTarget),
+          );
+        };
+        const renderActiveFilters = () => {
+          const area = byId('active-filters');
+          const active = Object.entries(selections).flatMap(
+            ([column, schemes]) => schemes.map(scheme => ({ column, scheme })),
+          );
+          area.hidden = !active.length;
+          area.innerHTML =
+            active
+              .map(
+                ({ column, scheme }) =>
+                  `<span class="filter-tag">${escapeHtml(column)} ${swatch(scheme, true)}<span class="sr-only">${palette[scheme].name}</span><button type="button" class="tag-dismiss" data-column="${column}" data-scheme="${scheme}" aria-label="移除 ${column} ${palette[scheme].name}筛选">×</button></span>`,
+              )
+              .join('') +
+            '<button type="button" class="clear-link" id="clear-all">Clear all</button>';
+          area
+            .querySelectorAll('.tag-dismiss')
+            .forEach(button =>
+              button.addEventListener('click', () =>
+                toggleColor(button.dataset.column, button.dataset.scheme),
+              ),
+            );
+          byId('clear-all').addEventListener('click', clearAll);
+        };
+        const formatValue = (column, value) =>
+          column.numeric
+            ? Number(value).toLocaleString('en-US')
+            : escapeHtml(value);
+        const renderCell = (column, item) => {
+          const style = item.styles[column.key];
+          const background = style.background
+            ? `background-color:rgba(${palette[style.background.scheme].rgb.join(',')},${style.background.alpha});`
+            : '';
+          const text = style.text
+            ? `color:${palette[style.text.scheme].hex};font-weight:600;`
+            : '';
+          const bar =
+            !style.background && style.bar
+              ? `<span class="cell-bar" style="background:${palette[style.bar.scheme].hex};width:${style.bar.width}%" aria-hidden="true"></span>`
+              : '';
+          return `<td class="${column.numeric ? 'numeric' : ''}" style="${background}${text}">${bar}<span class="cell-value">${formatValue(column, item.row[column.key])}</span></td>`;
+        };
+        const renderTable = () => {
+          renderActiveFilters();
+          const blockedColumns = Object.keys(catalog).filter(column =>
+            gradientColumns.has(column),
+          );
+          byId('gradient-column-notice').hidden = !blockedColumns.length;
+          byId('gradient-column-notice').textContent =
+            `${blockedColumns.join(', ')} 含有效渐变规则，颜色筛选暂不可用。请关闭该列相关规则的 Use gradient 后再筛选；染色仍正常显示。`;
+          const area = byId('table-area');
+          byId('table-search').disabled = chartState !== 'ready';
+          if (chartState !== 'ready') {
+            area.innerHTML =
+              chartState === 'loading'
+                ? '<div class="chart-state" role="status"><span class="spinner" aria-hidden="true"></span><strong>Loading chart…</strong><span class="subtle">设计预览中的加载状态</span></div>'
+                : '<div class="chart-state" role="alert"><span class="error-symbol" aria-hidden="true">!</span><strong>Unable to load chart</strong><span class="subtle">筛选条件已保留，请重试。</span><button type="button" class="button" id="retry-chart">Retry</button></div>';
+            if (byId('retry-chart'))
+              byId('retry-chart').addEventListener('click', () => {
+                chartState = 'ready';
+                renderTable();
+                announce('已恢复图表，筛选条件保持不变');
+              });
+            return;
+          }
+          const filtered = matchedRows();
+          const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+          page = Math.min(page, pageCount);
+          const visible = filtered.slice(
+            (page - 1) * pageSize,
+            page * pageSize,
+          );
+          const headers = columns
+            .map(
+              column =>
+                `<th scope="col" class="${column.numeric ? 'numeric' : ''}"><span class="header-label">${column.key}<span class="sort-hint" aria-hidden="true">↕</span>${catalog[column.key] && catalog[column.key].length ? `<button type="button" class="filter-button ${selections[column.key] ? 'selected' : ''}" data-filter-column="${column.key}" aria-label="Filter by color: ${column.key}" aria-haspopup="menu" aria-expanded="${openColumn === column.key}">${funnel}</button>` : ''}</span></th>`,
+            )
+            .join('');
+          const body = visible.length
+            ? visible
+                .map(
+                  item =>
+                    `<tr data-demo-row="${item.row.id}">${columns.map(column => renderCell(column, item)).join('')}</tr>`,
+                )
+                .join('')
+            : '<tr><td colspan="6" class="empty-cell"><span class="empty-title">No matching records</span><span>没有符合全部筛选条件的数据。</span><br /><button type="button" class="clear-link" id="empty-clear">Clear filters and search</button></td></tr>';
+          area.innerHTML = `<div class="table-scroll"><table aria-label="Sales quality demo table"><thead><tr>${headers}</tr></thead><tbody>${body}</tbody></table></div><div class="table-footer"><span id="row-count">${filtered.length ? (page - 1) * pageSize + 1 : 0}–${Math.min(page * pageSize, filtered.length)} of ${filtered.length} rows <span class="subtle">(${rows.length} total)</span></span><div class="pagination"><button type="button" class="page-button" id="previous-page" aria-label="Previous page" ${page <= 1 ? 'disabled' : ''}>‹</button>${Array.from({ length: pageCount }, (_, index) => `<button type="button" class="page-button ${page === index + 1 ? 'current' : ''}" data-page="${index + 1}" ${page === index + 1 ? 'aria-current="page"' : ''}>${index + 1}</button>`).join('')}<button type="button" class="page-button" id="next-page" aria-label="Next page" ${page >= pageCount ? 'disabled' : ''}>›</button><select class="page-size" id="page-size" aria-label="Rows per page"><option value="5" ${pageSize === 5 ? 'selected' : ''}>5 / page</option><option value="10" ${pageSize === 10 ? 'selected' : ''}>10 / page</option><option value="20" ${pageSize === 20 ? 'selected' : ''}>20 / page</option></select></div></div>`;
+          area.querySelectorAll('[data-filter-column]').forEach(button =>
+            button.addEventListener('click', event => {
+              event.stopPropagation();
+              openColorMenu(button.dataset.filterColumn, button);
+            }),
+          );
+          area.querySelectorAll('[data-page]').forEach(button =>
+            button.addEventListener('click', () => {
+              closeMenu(false);
+              page = Number(button.dataset.page);
+              renderTable();
+            }),
+          );
+          byId('previous-page').addEventListener('click', () => {
+            closeMenu(false);
+            page -= 1;
+            renderTable();
+          });
+          byId('next-page').addEventListener('click', () => {
+            closeMenu(false);
+            page += 1;
+            renderTable();
+          });
+          byId('page-size').addEventListener('change', event => {
+            closeMenu(false);
+            page = 1;
+            pageSize = Number(event.target.value);
+            renderTable();
+          });
+          if (byId('empty-clear'))
+            byId('empty-clear').addEventListener('click', clearAll);
+        };
+        const announce = message => {
+          byId('announcement').textContent = message;
+        };
+        const clearAll = () => {
+          selections = {};
+          search = '';
+          page = 1;
+          byId('table-search').value = '';
+          closeMenu(false);
+          renderTable();
+          announce('已清除全部筛选，显示 16 行');
+        };
+        const toggleColor = (column, scheme) => {
+          if (gradientColumns.has(column)) {
+            announce('该列含渐变规则，颜色筛选暂不可用');
+            return;
+          }
+          const selected = selections[column] || [];
+          selections[column] = selected.includes(scheme)
+            ? selected.filter(value => value !== scheme)
+            : [...selected, scheme];
+          if (!selections[column].length) delete selections[column];
+          page = 1;
+          renderTable();
+          if (openColumn) {
+            renderColorMenu();
+            const button = byId('color-menu').querySelector(
+              `[data-color="${scheme}"]`,
+            );
+            if (button) button.focus();
+          }
+          announce(
+            `匹配 ${matchedRows().length} 行，原始数据 ${rows.length} 行`,
+          );
+        };
+        const renderColorMenu = () => {
+          const menu = byId('color-menu');
+          if (!openColumn || !catalog[openColumn]) return;
+          const blocked = gradientColumns.has(openColumn);
+          menu.innerHTML = `<div class="menu-title">Filter by color · ${escapeHtml(openColumn)}</div>${blocked ? '<div class="gradient-warning menu-gradient-warning">该列含渐变规则，颜色筛选暂不可用。请关闭相关规则的 Use gradient 后重试。</div>' : ''}${catalog[openColumn].map(scheme => `<button type="button" class="color-option" role="menuitemcheckbox" ${blocked ? 'disabled aria-disabled="true"' : ''} aria-checked="${Boolean(selections[openColumn] && selections[openColumn].includes(scheme))}" aria-label="${palette[scheme].name}" data-color="${scheme}">${swatch(scheme)}<span class="sr-only">${palette[scheme].name}</span><span class="option-count" aria-label="原始结果中的行数">${prepared.filter(item => item.colors[openColumn].has(scheme)).length}</span><span class="selection-check" aria-hidden="true">${selections[openColumn] && selections[openColumn].includes(scheme) ? '✓' : ''}</span></button>`).join('')}<div class="menu-footer"><button type="button" class="clear-link" id="clear-column" role="menuitem">Clear filter</button></div>`;
+          menu.querySelectorAll('[data-color]').forEach(button =>
+            button.addEventListener('click', event => {
+              event.stopPropagation();
+              toggleColor(openColumn, button.dataset.color);
+            }),
+          );
+          byId('clear-column').addEventListener('click', () => {
+            const column = openColumn;
+            delete selections[column];
+            page = 1;
+            renderTable();
+            closeMenu(true);
+            announce(`${column} 的颜色筛选已清除`);
+          });
+          menu.hidden = false;
+          const height = menu.getBoundingClientRect().height;
+          menu.style.left = `${Math.max(8, Math.min(menuPosition.right - 208, window.innerWidth - 216))}px`;
+          menu.style.top = `${Math.max(8, Math.min(menuPosition.bottom + 5, window.innerHeight - height - 8))}px`;
+        };
+        const openColorMenu = (column, button) => {
+          if (openColumn === column) {
+            closeMenu(true);
+            return;
+          }
+          closeMenu(false);
+          openColumn = column;
+          menuPosition = button.getBoundingClientRect();
+          button.setAttribute('aria-expanded', 'true');
+          renderColorMenu();
+          byId('color-menu').querySelector('button:not(:disabled)').focus();
+        };
+        const closeMenu = restoreFocus => {
+          const column = openColumn;
+          byId('color-menu').hidden = true;
+          openColumn = null;
+          const trigger = document.querySelector(
+            `[data-filter-column="${column}"]`,
+          );
+          if (trigger) {
+            trigger.setAttribute('aria-expanded', 'false');
+            if (restoreFocus) trigger.focus();
+          }
+        };
+        const setOperatorOptions = preferred => {
+          const options = columnNumeric(byId('rule-column').value)
+            ? numberOperators
+            : stringOperators;
+          byId('rule-operator').innerHTML = options
+            .map(
+              ([value, label]) => `<option value="${value}">${label}</option>`,
+            )
+            .join('');
+          byId('rule-operator').value = options.some(
+            ([value]) => value === preferred,
+          )
+            ? preferred
+            : 'None';
+        };
+        const syncForm = () => {
+          const numeric = columnNumeric(byId('rule-column').value);
+          const bar = byId('rule-object').value === 'bar';
+          const oldTarget = byId('rule-target-column').value;
+          byId('rule-target-column').innerHTML = (
+            bar ? [] : [['entire row', 'entire row']]
+          )
+            .concat(
+              columns
+                .filter(column => !bar || column.numeric)
+                .map(column => [column.key, column.key]),
+            )
+            .map(
+              ([value, label]) => `<option value="${value}">${label}</option>`,
+            )
+            .join('');
+          byId('rule-target-column').value = [
+            ...byId('rule-target-column').options,
+          ].some(option => option.value === oldTarget)
+            ? oldTarget
+            : byId('rule-column').value;
+          if (!byId('rule-target-column').value)
+            byId('rule-target-column').selectedIndex = 0;
+          byId('gradient-row').hidden =
+            !numeric || byId('rule-object').value !== 'background';
+          const activeGradient =
+            !byId('gradient-row').hidden && byId('rule-gradient').checked;
+          if (activeGradient && byId('rule-enabled').checked)
+            closingEnabledForGradient = true;
+          byId('rule-enabled').disabled = activeGradient;
+          if (activeGradient) byId('rule-enabled').checked = false;
+          byId('gradient-filter-warning').hidden = !activeGradient;
+          byId('gradient-filter-warning').textContent =
+            '渐变染色暂不支持颜色筛选。请关闭 Use gradient 后启用 Enable alert filter。' +
+            (closingEnabledForGradient
+              ? ' 本规则原已启用的筛选将在 Apply 后关闭；染色配置仍可正常保存。'
+              : ' 染色配置仍可正常 Apply 保存。');
+          byId('rule-value').type = numeric ? 'number' : 'text';
+          const operator = byId('rule-operator').value;
+          const range = operator.startsWith('between');
+          byId('target-value-field').hidden = operator === 'None';
+          byId('right-value-field').hidden = !range;
+          byId('operator-row').classList.toggle('range-row', range);
+          document.querySelector('label[for="rule-value"]').textContent = range
+            ? 'Left value'
+            : 'Target value';
+        };
+        const openFormatter = (id, trigger) => {
+          closeMenu(false);
+          editingId = id;
+          closingEnabledForGradient = false;
+          previousFocus = trigger;
+          const rule = rules.find(item => item.id === id) || {
+            column: 'gross_profit',
+            scheme: 'success',
+            target: 'gross_profit',
+            object: 'background',
+            gradient: true,
+            operator: '>',
+            value: 0,
+            right: 5000,
+            enabled: false,
+          };
+          byId('formatter-title').textContent =
+            id === null ? 'Add new formatter' : 'Edit formatter';
+          byId('rule-column').innerHTML = columns
+            .map(
+              column => `<option value="${column.key}">${column.key}</option>`,
+            )
+            .join('');
+          byId('rule-column').value = rule.column;
+          byId('rule-scheme').value = rule.scheme;
+          byId('rule-object').value = rule.object;
+          byId('rule-target-column').innerHTML =
+            `<option value="${escapeHtml(rule.target)}">${escapeHtml(rule.target)}</option>`;
+          byId('rule-gradient').checked = rule.gradient;
+          byId('rule-enabled').checked = rule.enabled;
+          setOperatorOptions(rule.operator);
+          syncForm();
+          byId('rule-value').value = rule.value;
+          byId('rule-right-value').value = rule.right;
+          byId('form-error').hidden = true;
+          byId('dialog-overlay').hidden = false;
+          const dialog = byId('formatter-dialog');
+          dialog.hidden = false;
+          const controls = document
+            .querySelector('.controls')
+            .getBoundingClientRect();
+          const triggerRect = trigger.getBoundingClientRect();
+          const height = dialog.getBoundingClientRect().height;
+          dialog.style.left = `${Math.max(12, Math.min(controls.right - 25, window.innerWidth - 462))}px`;
+          dialog.style.top = `${Math.max(15, Math.min(triggerRect.top - 70, window.innerHeight - height - 15))}px`;
+          byId('rule-column').focus();
+        };
+        const closeFormatter = () => {
+          byId('formatter-dialog').hidden = true;
+          byId('dialog-overlay').hidden = true;
+          if (previousFocus && document.contains(previousFocus))
+            previousFocus.focus();
+          else if (editingId !== null) {
+            const button = document.querySelector(
+              `[data-rule-id="${editingId}"]`,
+            );
+            if (button) button.focus();
+          } else byId('add-formatter').focus();
+        };
+        byId('formatter-form').addEventListener('submit', event => {
+          event.preventDefault();
+          const numeric = columnNumeric(byId('rule-column').value);
+          const operator = byId('rule-operator').value;
+          const value = numeric
+            ? Number(byId('rule-value').value)
+            : byId('rule-value').value;
+          const right = Number(byId('rule-right-value').value);
+          let error = '';
+          if (operator !== 'None' && byId('rule-value').value === '')
+            error = 'Please enter a target value.';
+          if (
+            operator.startsWith('between') &&
+            (byId('rule-right-value').value === '' || Number(value) >= right)
+          )
+            error = 'The left value must be smaller than the right value.';
+          if (error) {
+            byId('form-error').textContent = error;
+            byId('form-error').hidden = false;
+            return;
+          }
+          const rule = {
+            id:
+              editingId === null
+                ? Math.max(...rules.map(item => item.id)) + 1
+                : editingId,
+            column: byId('rule-column').value,
+            scheme: byId('rule-scheme').value,
+            target: byId('rule-target-column').value,
+            object: byId('rule-object').value,
+            gradient:
+              !byId('gradient-row').hidden && byId('rule-gradient').checked,
+            operator,
+            value,
+            right,
+            enabled:
+              !byId('rule-enabled').disabled && byId('rule-enabled').checked,
+          };
+          rules =
+            editingId === null
+              ? [...rules, rule]
+              : rules.map(item => (item.id === editingId ? rule : item));
+          prepareColors();
+          page = 1;
+          chartState = 'ready';
+          renderRules();
+          renderTable();
+          closeFormatter();
+          announce('规则已应用。Enable alert filter 仅控制目标列筛选入口。');
+        });
+        byId('rule-column').addEventListener('change', () => {
+          setOperatorOptions(byId('rule-operator').value);
+          syncForm();
+        });
+        byId('rule-object').addEventListener('change', syncForm);
+        byId('rule-gradient').addEventListener('change', syncForm);
+        byId('rule-operator').addEventListener('change', syncForm);
+        document
+          .querySelector('.close-dialog')
+          .addEventListener('click', closeFormatter);
+        byId('cancel-formatter').addEventListener('click', closeFormatter);
+        byId('dialog-overlay').addEventListener('click', closeFormatter);
+        byId('table-search').addEventListener('input', event => {
+          search = event.target.value.trim().toLowerCase();
+          page = 1;
+          closeMenu(false);
+          renderTable();
+          announce(`匹配 ${matchedRows().length} 行`);
+        });
+        byId('update-chart').addEventListener('click', () => {
+          chartState = 'ready';
+          prepareColors();
+          renderTable();
+          announce('演示图表已更新，未发送后端请求');
+        });
+        document.querySelectorAll('[data-scene]').forEach(button =>
+          button.addEventListener('click', () => {
+            closeMenu(false);
+            if (!byId('formatter-dialog').hidden) closeFormatter();
+            scenario = button.dataset.scene;
+            if (scenario !== 'loading' && scenario !== 'error') {
+              rules = initialRules.map(rule => ({ ...rule }));
+              selections = {};
+              search = '';
+              page = 1;
+              pageSize = 10;
+              byId('table-search').value = '';
+            }
+            chartState =
+              scenario === 'loading' || scenario === 'error'
+                ? scenario
+                : 'ready';
+            if (scenario === 'gradient') {
+              rules[0].gradient = true;
+              rules[0].enabled = false;
+              rules[1].enabled = true;
+            }
+            prepareColors();
+            if (scenario === 'green')
+              selections = { gross_profit: ['success'] };
+            if (scenario === 'multiple')
+              selections = { gross_profit: ['success', 'error'] };
+            if (scenario === 'empty')
+              selections = {
+                gross_profit: ['success'],
+                quality_score: ['error'],
+              };
+            document
+              .querySelectorAll('[data-scene]')
+              .forEach(item =>
+                item.setAttribute('aria-pressed', String(item === button)),
+              );
+            renderRules();
+            renderTable();
+            if (scenario === 'configure')
+              openFormatter(1, document.querySelector('[data-rule-id="1"]'));
+            announce(`切换至${button.textContent}预览场景`);
+          }),
+        );
+        document.addEventListener('click', event => {
+          if (
+            openColumn &&
+            !byId('color-menu').contains(event.target) &&
+            !event.target.closest('[data-filter-column]')
+          )
+            closeMenu(false);
+        });
+        document.addEventListener('keydown', event => {
+          if (event.key === 'Escape') {
+            if (!byId('formatter-dialog').hidden) {
+              event.preventDefault();
+              closeFormatter();
+            } else if (openColumn) {
+              event.preventDefault();
+              closeMenu(true);
+            }
+          }
+          if (!byId('formatter-dialog').hidden && event.key === 'Tab') {
+            const controls = [
+              ...byId('formatter-dialog').querySelectorAll(
+                'button, input, select',
+              ),
+            ].filter(
+              element => !element.disabled && element.getClientRects().length,
+            );
+            const first = controls[0];
+            const last = controls[controls.length - 1];
+            if (event.shiftKey && document.activeElement === first) {
+              event.preventDefault();
+              last.focus();
+            } else if (!event.shiftKey && document.activeElement === last) {
+              event.preventDefault();
+              first.focus();
+            }
+          }
+          if (
+            openColumn &&
+            byId('color-menu').contains(document.activeElement)
+          ) {
+            const items = [
+              ...byId('color-menu').querySelectorAll('button:not(:disabled)'),
+            ];
+            const index = items.indexOf(document.activeElement);
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+              event.preventDefault();
+              items[
+                (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) %
+                  items.length
+              ].focus();
+            }
+            if (event.key === 'Home' || event.key === 'End') {
+              event.preventDefault();
+              items[event.key === 'Home' ? 0 : items.length - 1].focus();
+            }
+            if (event.key === 'Tab') closeMenu(false);
+          }
+        });
+        window.addEventListener('resize', () => {
+          closeMenu(false);
+          if (!byId('formatter-dialog').hidden) closeFormatter();
+        });
+        window.addEventListener(
+          'scroll',
+          () => {
+            if (openColumn) closeMenu(false);
+          },
+          true,
+        );
+        prepareColors();
+        renderRules();
+        renderTable();
+      })();
+    </script>
+  </body>
+</html>
