@@ -15,11 +15,20 @@
 # specific language governing permissions and limitations
 # under the License.
 import io
+import re
+from datetime import datetime
 from typing import Any
 
 import pandas as pd
 
 from superset.utils.core import GenericDataType
+
+
+def xlsx_filename(chart_title: str | None) -> str:
+    """Name a workbook using its chart title and local export time to the second."""
+    safe_title = re.sub(r'[\\/:*?"<>|\x00-\x1f\x7f]', "_", chart_title or "")
+    safe_title = safe_title.strip(" .") or "chart"
+    return f"{safe_title}_{datetime.now():%Y%m%d%H%M%S}.xlsx"
 
 
 def quote_formulas(df: pd.DataFrame) -> pd.DataFrame:

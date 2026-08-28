@@ -49,6 +49,7 @@ import { useToasts } from 'src/components/MessageToasts/withToasts';
 import { DEFAULT_CSV_STREAMING_ROW_THRESHOLD } from 'src/constants';
 import { exportChart, getChartKey } from 'src/explore/exploreUtils';
 import downloadAsImage from 'src/utils/downloadAsImage';
+import xlsxFilename from 'src/utils/xlsxFilename';
 import { getChartPermalink } from 'src/utils/urlUtils';
 import copyTextToClipboard from 'src/utils/copy';
 import { useHeaderReportMenuItems } from 'src/features/reports/ReportModal/HeaderReportDropdown';
@@ -565,7 +566,7 @@ export const useExploreAdditionalActionsMenu = (
       }));
       ws['!cols'] = colWidths;
 
-      XLSX.writeFile(wb, `${filename || 'current_view'}.xlsx`);
+      XLSX.writeFile(wb, xlsxFilename(filename));
     } catch {
       // If xlsx isn't available for some reason, fall back to CSV
       downloadClientCSV(rows, columns, filename || 'current_view');

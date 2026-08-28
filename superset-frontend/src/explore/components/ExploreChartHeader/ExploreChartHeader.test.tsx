@@ -33,8 +33,12 @@ import { FeatureFlag, VizType } from '@superset-ui/core';
 import { useUnsavedChangesPrompt } from 'src/hooks/useUnsavedChangesPrompt';
 import ExploreHeader, { ExploreChartHeaderProps } from '.';
 import { getChartMetadataRegistry } from '@superset-ui/core';
-import fs from 'fs';
-import path from 'path';
+import { writeFile } from 'xlsx';
+
+jest.mock('xlsx', () => ({
+  ...jest.requireActual('xlsx'),
+  writeFile: jest.fn(),
+}));
 
 const chartEndpoint = 'glob:*api/v1/chart/*';
 
@@ -1100,6 +1104,14 @@ describe('Additional actions tests', () => {
       userEvent.click(await screen.findByText(/Export to (Excel|\.XLSX)/i));
 
       expect(spyExportChart).not.toHaveBeenCalled();
+      await waitFor(() => {
+        expect(writeFile).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.stringMatching(
+            /^Age distribution of respondents_\d{14}\.xlsx$/,
+          ),
+        );
+      });
       getSpy.mockRestore();
     });
 
@@ -1124,14 +1136,6 @@ describe('Additional actions tests', () => {
       expect(args.resultType).toBe('results');
       expect(args.resultFormat).toBe('xlsx');
       getSpy.mockRestore();
-
-      // delete test excel files
-      const cwd = process.cwd();
-      for (const file of fs.readdirSync(cwd)) {
-        if (file.endsWith('.xlsx')) {
-          fs.unlinkSync(path.join(cwd, file));
-        }
-      }
     });
 
     test('JSON (Current View) falls back to server export when server_pagination is true', async () => {

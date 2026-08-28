@@ -52,6 +52,7 @@ from superset.utils.core import (
     FilterOperator,
     GenericDataType,
 )
+from superset.utils.excel import xlsx_filename
 from superset.utils.styled_excel import (
     resolve_sheet_name,
     StyledWorkbookWriter,
@@ -597,7 +598,11 @@ class ExportDashboardXlsxCommand(BaseCommand):
             )
             return DashboardXlsxExportResult(
                 temporary_path,
-                f"dashboard_{self._dashboard.id}.xlsx",
+                (
+                    xlsx_filename(work_items[0].chart.slice_name)
+                    if len(work_items) == 1
+                    else f"dashboard_{self._dashboard.id}.xlsx"
+                ),
             )
         except SupersetSecurityException:
             raise

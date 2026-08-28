@@ -15,11 +15,13 @@
 # specific language governing permissions and limitations
 # under the License.
 
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 from unittest.mock import MagicMock, patch
 
+import pandas as pd
 import pytest
 from marshmallow import ValidationError
 
@@ -331,3 +333,40 @@ def test_dashboard_xlsx_failure_closes_writer_and_removes_temporary_file(
 
     writer.close.assert_called_once_with()
     assert not temporary_path.exists()
+
+
+@pytest.mark.parametrize("table_count", [1, 2])
+def test_dashboard_xlsx_names_single_table_after_chart(
+    tmp_path: Path,
+    table_count: int,
+) -> None:
+    charts = [
+        make_chart(chart_id, f"质量报表 {chart_id}") for chart_id in range(table_count)
+    ]
+    command = ExportDashboardXlsxCommand(make_dashboard({}, charts), ["ROOT_ID"])
+    temporary_path = tmp_path / "export.xlsx"
+    temporary_file = temporary_path.open("w+b")
+    work_items = [DashboardXlsxWorkItem(chart, chart.slice_name) for chart in charts]
+
+    with (
+        patch.object(command, "_collect_work_items", return_value=(work_items, [])),
+        patch.object(command, "_query_context", return_value=MagicMock()),
+        patch.object(
+            command,
+            "_execute_chart",
+            return_value=(pd.DataFrame({"value": [1]}), [], None),
+        ),
+        patch(
+            "superset.commands.dashboard.export_xlsx.tempfile.NamedTemporaryFile",
+            return_value=temporary_file,
+        ),
+        patch("superset.commands.dashboard.export_xlsx.StyledWorkbookWriter"),
+        patch("superset.commands.dashboard.export_xlsx.TableRuleResolver"),
+        patch("superset.utils.excel.datetime") as clock,
+    ):
+        clock.now.return_value = datetime(2026, 8, 2, 3, 4, 5)
+        result = command.run()
+
+    assert result.filename == (
+        "质量报表 0_20260802030405.xlsx" if table_count == 1 else "dashboard_17.xlsx"
+    )

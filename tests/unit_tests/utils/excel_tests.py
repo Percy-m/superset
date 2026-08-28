@@ -16,12 +16,33 @@
 # under the License.
 
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 import pandas as pd
+import pytest
 from pandas.api.types import is_numeric_dtype
 
 from superset.utils.core import GenericDataType
-from superset.utils.excel import apply_column_types, df_to_excel
+from superset.utils.excel import apply_column_types, df_to_excel, xlsx_filename
+
+
+@pytest.mark.parametrize(
+    ("title", "expected_title"),
+    [
+        ("FR-01 ClickHouse Drill Detail", "FR-01 ClickHouse Drill Detail"),
+        ("数据质量 😀", "数据质量 😀"),
+        ('profit/region: "A"\r\n', "profit_region_ _A___"),
+        (None, "chart"),
+        (" ... ", "chart"),
+    ],
+)
+def test_xlsx_filename_preserves_title_and_formats_timestamp(
+    title: str | None,
+    expected_title: str,
+) -> None:
+    with patch("superset.utils.excel.datetime") as clock:
+        clock.now.return_value = datetime(2026, 8, 2, 3, 4, 5)
+        assert xlsx_filename(title) == f"{expected_title}_20260802030405.xlsx"
 
 
 def test_timezone_conversion() -> None:

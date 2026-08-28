@@ -19,9 +19,10 @@ from __future__ import annotations
 import contextlib
 import logging
 from datetime import datetime
+from io import BytesIO
 from typing import Any, Callable, TYPE_CHECKING
 
-from flask import current_app as app, g, make_response, request, Response
+from flask import current_app as app, g, make_response, request, Response, send_file
 from flask_appbuilder.api import expose, protect
 from flask_babel import gettext as _
 from marshmallow import ValidationError
@@ -58,6 +59,7 @@ from superset.utils.core import (
     get_user_id,
 )
 from superset.utils.decorators import logs_context
+from superset.utils.excel import xlsx_filename
 from superset.views.base import CsvResponse, generate_download_headers, XlsxResponse
 from superset.views.base_api import statsd_metrics
 
@@ -425,7 +427,20 @@ class ChartDataRestApi(ChartRestApi):
                 if is_csv_format:
                     return CsvResponse(data, headers=generate_download_headers("csv"))
 
-                return XlsxResponse(data, headers=generate_download_headers("xlsx"))
+                query_context = result["query_context"]
+                chart = query_context.slice_
+                export_form_data = form_data or query_context.form_data or {}
+                chart_title = (
+                    chart.slice_name if chart else export_form_data.get("slice_name")
+                )
+                return send_file(
+                    BytesIO(data),
+                    mimetype=XlsxResponse.default_mimetype,
+                    as_attachment=True,
+                    download_name=xlsx_filename(
+                        chart_title if isinstance(chart_title, str) else None
+                    ),
+                )
 
             # return multi-query results bundled as a zip file
             def _process_data(query_data: Any) -> Any:
