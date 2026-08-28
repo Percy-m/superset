@@ -216,9 +216,6 @@ function AlertColorMenuLabel({
   colorKey: TablePaintColor;
 }) {
   const theme = useTheme();
-  const labelRef = useRef<HTMLSpanElement>(null);
-  const [isMenuItemFocused, setIsMenuItemFocused] = useState(false);
-  const [isTooltipOpen, setIsTooltipOpen] = useState(false);
   const presentations = {
     RED: {
       color: theme.colorError,
@@ -241,42 +238,15 @@ function AlertColorMenuLabel({
   >;
   const { color, label } = presentations[colorKey];
 
-  useEffect(() => {
-    const menuItem = labelRef.current?.closest<HTMLElement>(
-      '[role="menuitemcheckbox"]',
-    );
-    if (!menuItem) {
-      return undefined;
-    }
-
-    const handleFocus = () => setIsMenuItemFocused(true);
-    const handleBlur = () => setIsMenuItemFocused(false);
-    menuItem.addEventListener('focus', handleFocus);
-    menuItem.addEventListener('blur', handleBlur);
-
-    return () => {
-      menuItem.removeEventListener('focus', handleFocus);
-      menuItem.removeEventListener('blur', handleBlur);
-    };
-  }, []);
-
   return (
-    <Tooltip
-      open={isMenuItemFocused || isTooltipOpen}
-      onOpenChange={setIsTooltipOpen}
-      placement="right"
-      title={label}
-      trigger={['hover', 'focus']}
-    >
-      <AlertColorLabelContent ref={labelRef}>
-        <AlertColorSwatch
-          aria-hidden
-          data-test={`alert-color-swatch-${colorKey.toLowerCase()}`}
-          swatchColor={disabled ? theme.colorTextDisabled : color}
-        />
-        <VisuallyHidden as="span">{label}</VisuallyHidden>
-      </AlertColorLabelContent>
-    </Tooltip>
+    <AlertColorLabelContent>
+      <AlertColorSwatch
+        aria-hidden
+        data-test={`alert-color-swatch-${colorKey.toLowerCase()}`}
+        swatchColor={disabled ? theme.colorTextDisabled : color}
+      />
+      <VisuallyHidden as="span">{label}</VisuallyHidden>
+    </AlertColorLabelContent>
   );
 }
 

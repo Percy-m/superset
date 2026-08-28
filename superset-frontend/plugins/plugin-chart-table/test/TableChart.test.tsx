@@ -238,12 +238,63 @@ test('color menu uses color swatches without business-level labels', async () =>
         /Critical alert|Warning alert|Normal status|Alert level/,
       ),
     ).not.toBeInTheDocument();
-    fireEvent.focus(red);
-    expect(await screen.findByRole('tooltip')).toHaveTextContent('Red');
   } finally {
     window.featureFlags = previousFlags;
   }
 });
+
+test.each(['Green', 'Yellow', 'Red'])(
+  '%s color swatch never leaves a hover or focus tooltip and remains selectable',
+  async name => {
+    const previousFlags = window.featureFlags;
+    window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
+    jest.useFakeTimers();
+    const setDataMask = jest.fn();
+    try {
+      render(
+        <ProviderWrapper>
+          <TableChart {...colorProps(setDataMask)} sticky={false} />
+        </ProviderWrapper>,
+      );
+      fireEvent.click(screen.getByLabelText('Filter by color for sum__num'));
+      const item = await screen.findByRole('menuitemcheckbox', { name });
+      const swatch = within(item).getByTestId(
+        `alert-color-swatch-${name.toLowerCase()}`,
+      );
+      expect(item).toHaveAttribute('aria-checked', 'false');
+      expect(swatch).not.toHaveAttribute('title');
+      fireEvent.mouseEnter(swatch);
+      fireEvent.focus(item);
+      act(() => jest.advanceTimersByTime(1000));
+      expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+
+      // Leaving a focused menu item must not retain an overlay.
+      fireEvent.mouseLeave(swatch);
+      act(() => jest.advanceTimersByTime(1000));
+      expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+      fireEvent.click(item);
+      act(() => jest.advanceTimersByTime(1000));
+      expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+      expect(setDataMask).toHaveBeenLastCalledWith({
+        ownState: expect.objectContaining({
+          alertFilter: expect.objectContaining({
+            selections: [{ column: 'sum__num', colors: [name.toUpperCase()] }],
+          }),
+        }),
+      });
+
+      fireEvent.click(screen.getByLabelText('Filter by color for sum__num'));
+      expect(
+        await screen.findByRole('menuitemcheckbox', { name }),
+      ).toHaveAttribute('aria-checked', 'true');
+      act(() => jest.advanceTimersByTime(1000));
+      expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+    } finally {
+      jest.useRealTimers();
+      window.featureFlags = previousFlags;
+    }
+  },
+);
 
 test('unavailable snapshots retain a visible entry and an explanation', async () => {
   const previousFlags = window.featureFlags;
