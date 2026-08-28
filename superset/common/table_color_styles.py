@@ -737,6 +737,7 @@ def _resolve_page(  # noqa: C901
                 "showCellBars", form_data.get("show_cell_bars", True)
             )
             bar_color: str | None = None
+            # Default positive/negative bar paint is visual only; rules supply colors.
             bar_family: TablePaintColor | None = None
             for rule in ordered_formatters[key]:
                 source = str(rule["column"])
@@ -821,7 +822,6 @@ def _resolve_page(  # noqa: C901
                         "colorPositiveNegative", form_data.get("color_pn", True)
                     )
                     if color_pn:
-                        bar_family = "RED" if value < 0 else "GREEN"
                         bar_color = (
                             theme["colorError" if value < 0 else "colorSuccess"] + "50"
                         )

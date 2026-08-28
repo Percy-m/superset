@@ -268,6 +268,105 @@ def test_background_suppresses_cell_bar_even_if_later_bar_rule_matches() -> None
     ]
 
 
+@pytest.mark.parametrize(("value", "bar_color"), [(5, "#5ac18950"), (-5, "#e0435550")])
+def test_default_cell_bar_paint_does_not_contribute_filter_colors(
+    value: int, bar_color: str
+) -> None:
+    """Default positive/negative bars keep their rendering data, not filter colors."""
+    result = resolve_table_color_styles(
+        [{"value": value}],
+        ["value"],
+        [0],
+        {"query_mode": "raw", "show_cell_bars": True, "color_pn": True},
+    )
+    assert result["styles"] == [
+        {
+            "value": {
+                "cellBar": {
+                    "color": bar_color,
+                    "width": 100,
+                    "offset": 0,
+                    "min": 0,
+                    "max": 5,
+                },
+                "colors": [],
+            }
+        }
+    ]
+    assert result["catalog"] == {"value": []}
+    assert result["capabilities"] == {"value": {"enabled": False, "supported": True}}
+
+
+@pytest.mark.parametrize("show_bars", [True, False])
+def test_only_matched_visible_conditional_cell_bars_contribute_filter_colors(
+    show_bars: bool,
+) -> None:
+    """A visible matching bar counts; hidden, zero and default fallback bars do not."""
+    result = resolve_table_color_styles(
+        [{"value": -5}, {"value": 0}, {"value": 5}],
+        ["value"],
+        [0],
+        {
+            "query_mode": "raw",
+            "show_cell_bars": show_bars,
+            "color_pn": True,
+            "conditional_formatting": [
+                {
+                    "column": "value",
+                    "operator": "≤",
+                    "targetValue": 0,
+                    "colorScheme": "colorSuccess",
+                    "useGradient": False,
+                    "objectFormatting": "CELL_BAR",
+                    "filterable": True,
+                }
+            ],
+        },
+    )
+    assert [row["value"]["colors"] for row in result["styles"]] == [
+        ["GREEN"] if show_bars else [],
+        [],
+        [],
+    ]
+    assert result["catalog"] == {"value": ["GREEN"] if show_bars else []}
+    assert result["styles"][1]["value"] == {"colors": []}
+    if show_bars:
+        assert result["styles"][0]["value"]["cellBar"]["color"] == "#5ac199"
+        assert result["styles"][2]["value"]["cellBar"]["color"] == "#5ac18950"
+    else:
+        assert all("cellBar" not in row["value"] for row in result["styles"])
+
+
+@pytest.mark.parametrize("value", [-5, 5])
+def test_default_cell_bars_do_not_add_colors_to_explicit_text(value: int) -> None:
+    """An enabled column exposes its explicit text color without default bar colors."""
+    result = resolve_table_color_styles(
+        [{"value": value}],
+        ["value"],
+        [0],
+        {
+            "query_mode": "raw",
+            "show_cell_bars": True,
+            "conditional_formatting": [
+                {
+                    "column": "value",
+                    "operator": "None",
+                    "colorScheme": "colorWarning",
+                    "useGradient": False,
+                    "objectFormatting": "TEXT_COLOR",
+                    "filterable": True,
+                }
+            ],
+        },
+    )
+    assert result["styles"][0]["value"]["colors"] == ["YELLOW"]
+    assert result["styles"][0]["value"]["textColor"] == "rgb(252, 199, 0)"
+    assert result["styles"][0]["value"]["cellBar"]["color"] == (
+        "#e0435550" if value < 0 else "#5ac18950"
+    )
+    assert result["catalog"] == {"value": ["YELLOW"]}
+
+
 def test_empty_result_keeps_enabled_target_capability_and_empty_catalog() -> None:
     """A zero-row result must still expose clear/retry-capable column metadata."""
     result = resolve_table_color_styles(

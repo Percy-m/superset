@@ -222,19 +222,130 @@ const input: ResolveTableCellStyleInput = {
   theme,
 };
 
-test('does not index hidden bars, HTML bars, zero-width bars, or neutral bars', () => {
+test.each([
+  { value: -5, color: '#ff4d4f50', colorPositiveNegative: true },
+  { value: 5, color: '#52c41a50', colorPositiveNegative: true },
+  { value: 5, color: theme.colorFill, colorPositiveNegative: false },
+])(
+  'default Cell Bar $color for $value is rendered but not indexed',
+  ({ value, color, colorPositiveNegative }) => {
+    const paint = resolveTableCellStyle({
+      ...input,
+      value,
+      colorPositiveNegative,
+    });
+    expect(paint.cellBar).toEqual({
+      color,
+      width: 50,
+      offset: 0,
+      min: 0,
+      max: 10,
+    });
+    expect(paint.colors).toEqual([]);
+    expect(toTableCellPaint(paint)).toEqual({
+      cellBar: paint.cellBar,
+      colors: [],
+    });
+  },
+);
+
+test('does not index hidden, HTML, or zero-width conditional Cell Bars', () => {
+  const conditionalInput = {
+    ...input,
+    columnColorFormatters: getColorFormatters(
+      [
+        {
+          column: 'profit',
+          operator: Comparator.None,
+          colorScheme: 'colorSuccess',
+          useGradient: false,
+          objectFormatting: ObjectFormattingEnum.CELL_BAR,
+        },
+      ],
+      [{ profit: 0 }, input.row],
+      theme,
+    ),
+  };
   expect(
-    resolveTableCellStyle({ ...input, showCellBars: false }).colors,
+    resolveTableCellStyle({ ...conditionalInput, showCellBars: false }).colors,
   ).toEqual([]);
-  expect(resolveTableCellStyle({ ...input, renderHtml: true }).colors).toEqual(
-    [],
-  );
-  expect(resolveTableCellStyle({ ...input, value: 0 }).colors).toEqual([]);
   expect(
-    resolveTableCellStyle({ ...input, colorPositiveNegative: false }).colors,
+    resolveTableCellStyle({ ...conditionalInput, renderHtml: true }).colors,
   ).toEqual([]);
-  expect(resolveTableCellStyle(input).colors).toEqual(['GREEN']);
+  expect(
+    resolveTableCellStyle({ ...conditionalInput, value: 0 }).colors,
+  ).toEqual([]);
+  expect(resolveTableCellStyle(conditionalInput).colors).toEqual(['GREEN']);
+  expect(
+    resolveTableCellStyle({
+      ...conditionalInput,
+      colorPositiveNegative: false,
+    }).colors,
+  ).toEqual(['GREEN']);
 });
+
+test.each([
+  { value: -5, color: '#52c499', colors: ['GREEN'] },
+  { value: 5, color: '#52c41a50', colors: [] },
+])(
+  'only a matching explicit Cell Bar is indexed for $value',
+  ({ value, color, colors }) => {
+    const paint = resolveTableCellStyle({
+      ...input,
+      value,
+      columnColorFormatters: getColorFormatters(
+        [
+          {
+            column: 'profit',
+            operator: Comparator.LessThan,
+            targetValue: 0,
+            colorScheme: 'colorSuccess',
+            useGradient: false,
+            objectFormatting: ObjectFormattingEnum.CELL_BAR,
+            filterable: true,
+          },
+        ],
+        [{ profit: -5 }, { profit: 5 }],
+        theme,
+      ),
+    });
+    expect(paint.cellBar).toEqual({
+      color,
+      width: 50,
+      offset: 0,
+      min: 0,
+      max: 10,
+    });
+    expect(paint.colors).toEqual(colors);
+  },
+);
+
+test.each([-5, 5])(
+  'explicit text with a default Cell Bar indexes only text for %s',
+  value => {
+    const paint = resolveTableCellStyle({
+      ...input,
+      value,
+      columnColorFormatters: getColorFormatters(
+        [
+          {
+            column: 'profit',
+            operator: Comparator.None,
+            colorScheme: 'colorWarning',
+            useGradient: false,
+            objectFormatting: ObjectFormattingEnum.TEXT_COLOR,
+            filterable: true,
+          },
+        ],
+        [{ profit: value }],
+        theme,
+      ),
+    });
+    expect(paint.cellBar?.color).toBe(value < 0 ? '#ff4d4f50' : '#52c41a50');
+    expect(paint.textColor).toBe('rgb(250, 173, 20)');
+    expect(paint.colors).toEqual(['YELLOW']);
+  },
+);
 
 test('a background suppresses conditional Cell Bars without losing explicit text', () => {
   const rules = [

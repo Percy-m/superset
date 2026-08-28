@@ -330,6 +330,34 @@ def test_snapshot_rejects_changed_context_without_querying(
     assert len(harness.calls) == 1
 
 
+@pytest.mark.parametrize("server", [False, True])
+def test_snapshot_style_revision_rejects_old_reference_and_rebuilds_catalog(
+    app: Flask, monkeypatch: pytest.MonkeyPatch, server: bool
+) -> None:
+    harness = ColorQueryHarness(app, monkeypatch, server=server)
+    monkeypatch.setattr(
+        table_color_query, "TABLE_COLOR_STYLE_REVISION", 1, raising=False
+    )
+    original = harness.result()["table_color_metadata"]
+    monkeypatch.setattr(table_color_query, "TABLE_COLOR_STYLE_REVISION", 2)
+    harness.select(original["snapshot_id"])
+    with pytest.raises(TableColorFilterError, match="CONTEXT_CHANGED") as error:
+        harness.result()
+    assert error.value.status == 409
+    assert len(harness.calls) == 1
+
+    harness.context.table_color_filter = {"version": 2, "selections": []}
+    rebuilt = harness.result()["table_color_metadata"]
+    assert rebuilt["snapshot_id"] != original["snapshot_id"]
+    assert rebuilt["generation"] != original["generation"]
+    assert len(harness.calls) == 2
+    assert (
+        harness.result()["table_color_metadata"]["snapshot_id"]
+        == rebuilt["snapshot_id"]
+    )
+    assert len(harness.calls) == 2
+
+
 def test_snapshot_owner_is_not_authorized_by_opaque_id(
     app: Flask, monkeypatch: pytest.MonkeyPatch
 ) -> None:

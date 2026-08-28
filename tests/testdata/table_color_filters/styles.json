@@ -117,6 +117,116 @@
       "expected": {"styles": [{"profit": {"backgroundColor": "#e04355", "colors": ["RED"]}}]}
     },
     {
+      "name": "default_positive_negative_cell_bars_render_without_filter_colors",
+      "records": [{"profit": -10}, {"profit": 0}, {"profit": 20}],
+      "columns": ["profit"],
+      "coltypes": [0],
+      "form_data": {
+        "query_mode": "raw",
+        "show_cell_bars": true,
+        "color_pn": true,
+        "align_pn": false
+      },
+      "expected": {
+        "styles": [
+          {"profit": {"cellBar": {"color": "#ff4d4f50", "width": 33, "offset": 0, "min": -10, "max": 20}, "colors": []}},
+          {"profit": {"colors": []}},
+          {"profit": {"cellBar": {"color": "#52c41a50", "width": 67, "offset": 33, "min": -10, "max": 20}, "colors": []}}
+        ],
+        "capabilities": {"profit": {"enabled": false, "supported": true}}
+      }
+    },
+    {
+      "name": "unmatched_filterable_rule_does_not_index_default_cell_bars",
+      "records": [{"profit": -10}, {"profit": 20}],
+      "columns": ["profit"],
+      "coltypes": [0],
+      "form_data": {
+        "query_mode": "raw",
+        "show_cell_bars": true,
+        "conditional_formatting": [{"column": "profit", "operator": ">", "targetValue": 100, "colorScheme": "colorWarning", "useGradient": false, "filterable": true}]
+      },
+      "expected": {
+        "styles": [
+          {"profit": {"cellBar": {"color": "#ff4d4f50", "width": 50, "offset": 0, "min": 0, "max": 20}, "colors": []}},
+          {"profit": {"cellBar": {"color": "#52c41a50", "width": 100, "offset": 0, "min": 0, "max": 20}, "colors": []}}
+        ],
+        "catalog": {"profit": []},
+        "capabilities": {"profit": {"enabled": true, "supported": true}}
+      }
+    },
+    {
+      "name": "only_matched_visible_conditional_cell_bars_enter_the_catalog",
+      "records": [{"profit": -10}, {"profit": 0}, {"profit": 20}],
+      "columns": ["profit"],
+      "coltypes": [0],
+      "form_data": {
+        "query_mode": "raw",
+        "show_cell_bars": true,
+        "conditional_formatting": [{"column": "profit", "operator": "≤", "targetValue": 0, "colorScheme": "colorSuccess", "useGradient": false, "objectFormatting": "CELL_BAR", "filterable": true}]
+      },
+      "expected": {
+        "styles": [
+          {"profit": {"cellBar": {"color": "#52c499", "width": 50, "offset": 0, "min": 0, "max": 20}, "colors": ["GREEN"]}},
+          {"profit": {"colors": []}},
+          {"profit": {"cellBar": {"color": "#52c41a50", "width": 100, "offset": 0, "min": 0, "max": 20}, "colors": []}}
+        ],
+        "catalog": {"profit": ["GREEN"]},
+        "capabilities": {"profit": {"enabled": true, "supported": true}}
+      }
+    },
+    {
+      "name": "hidden_conditional_cell_bars_do_not_enter_the_catalog",
+      "records": [{"profit": -10}, {"profit": 20}],
+      "columns": ["profit"],
+      "coltypes": [0],
+      "form_data": {
+        "query_mode": "raw",
+        "show_cell_bars": false,
+        "conditional_formatting": [{"column": "profit", "operator": "None", "colorScheme": "colorSuccess", "useGradient": false, "objectFormatting": "CELL_BAR", "filterable": true}]
+      },
+      "expected": {
+        "styles": [{"profit": {"colors": []}}, {"profit": {"colors": []}}],
+        "catalog": {"profit": []}
+      }
+    },
+    {
+      "name": "explicit_text_excludes_default_cell_bar_colors",
+      "records": [{"profit": -10}, {"profit": 20}],
+      "columns": ["profit"],
+      "coltypes": [0],
+      "form_data": {
+        "query_mode": "raw",
+        "show_cell_bars": true,
+        "conditional_formatting": [{"column": "profit", "operator": "None", "colorScheme": "colorWarning", "useGradient": false, "objectFormatting": "TEXT_COLOR", "filterable": true}]
+      },
+      "expected": {
+        "styles": [
+          {"profit": {"textColor": "rgb(250, 173, 20)", "cellBar": {"color": "#ff4d4f50", "width": 50, "offset": 0, "min": 0, "max": 20}, "colors": ["YELLOW"]}},
+          {"profit": {"textColor": "rgb(250, 173, 20)", "cellBar": {"color": "#52c41a50", "width": 100, "offset": 0, "min": 0, "max": 20}, "colors": ["YELLOW"]}}
+        ],
+        "catalog": {"profit": ["YELLOW"]}
+      }
+    },
+    {
+      "name": "explicit_background_suppresses_default_bars_only_on_matching_cells",
+      "records": [{"profit": -10}, {"profit": 20}],
+      "columns": ["profit"],
+      "coltypes": [0],
+      "form_data": {
+        "query_mode": "raw",
+        "show_cell_bars": true,
+        "conditional_formatting": [{"column": "profit", "operator": "<", "targetValue": 0, "colorScheme": "colorWarning", "useGradient": false, "filterable": true}]
+      },
+      "expected": {
+        "styles": [
+          {"profit": {"backgroundColor": "#faad14", "colors": ["YELLOW"]}},
+          {"profit": {"cellBar": {"color": "#52c41a50", "width": 100, "offset": 0, "min": 0, "max": 20}, "colors": []}}
+        ],
+        "catalog": {"profit": ["YELLOW"]}
+      }
+    },
+    {
       "name": "native_cell_bar_slice_quirk_and_zero_width_are_preserved",
       "records": [{"profit": -10}, {"profit": 0}, {"profit": 20}],
       "columns": ["profit"],
@@ -280,7 +390,7 @@
       "form_data": {"query_mode": "raw"},
       "expected": {"styles": [
         {"value": {"colors": []}},
-        {"value": {"cellBar": {"color": "#52c41a50", "width": 100, "offset": 0, "min": 0, "max": 1}, "colors": ["GREEN"]}}
+        {"value": {"cellBar": {"color": "#52c41a50", "width": 100, "offset": 0, "min": 0, "max": 1}, "colors": []}}
       ]}
     }
   ]

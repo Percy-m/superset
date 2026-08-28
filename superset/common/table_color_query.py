@@ -67,6 +67,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Invalidate persisted paint/index pairs when color-filter semantics change.
+TABLE_COLOR_STYLE_REVISION = 2
+
 
 class TableColorQueryProcessor:
     """A color-only branch before QueryContext's totals and SQL execution."""
@@ -119,6 +122,7 @@ class TableColorQueryProcessor:
                 "comparison_main_label": self.trusted.comparison_main_label,
                 "dashboard_id": self.trusted.dashboard_id,
                 "version": 2,
+                "style_revision": TABLE_COLOR_STYLE_REVISION,
             },
             "table-color-context-",
         )

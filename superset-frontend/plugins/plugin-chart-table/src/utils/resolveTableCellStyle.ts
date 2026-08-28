@@ -148,6 +148,7 @@ export function resolveTableCellStyle({
   let arrow: string | undefined;
   let backgroundFamily: TablePaintColor | undefined;
   let textFamily: TablePaintColor | undefined;
+  // Default positive/negative bar paint is visual only; rules supply filter colors.
   let barFamily: TablePaintColor | undefined;
   let arrowFamily: TablePaintColor | undefined;
   const sources: ResolvedTableCellStyle['sources'] = {};
@@ -268,12 +269,6 @@ export function resolveTableCellStyle({
         ? `${value < 0 ? theme.colorError : theme.colorSuccess}50`
         : theme.colorFill;
     result.cellBar = { color, width, offset, min, max };
-    if (!customBarColor)
-      barFamily = colorPositiveNegative
-        ? value < 0
-          ? 'RED'
-          : 'GREEN'
-        : undefined;
   }
   if (!renderHtml && arrow) {
     const formatter = hasBasicColorColumnFormatters

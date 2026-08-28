@@ -22,6 +22,8 @@ Run from the repository root using its configured development environment::
         scripts/tests/validate_table_color_filters.py --transport http
     SUPERSET_CONFIG_PATH=$PWD/superset_config.py venv/bin/python \
         scripts/tests/validate_table_color_filters.py --transport test-client
+    SUPERSET_CONFIG_PATH=$PWD/superset_config.py venv/bin/python \
+        scripts/tests/validate_table_color_filters.py --transport http --cell-bars-only
 
 The HTTP mode checks the running service. The test-client mode runs the same
 real Flask routes, ClickHouse queries and Redis cache, with a pass-through
@@ -64,6 +66,8 @@ from PIL import ImageColor
 if TYPE_CHECKING:
     from flask import Flask
     from flask.testing import FlaskClient
+    from openpyxl.cell.cell import Cell
+    from openpyxl.formatting.rule import DataBar
 
 
 class AcceptanceError(Exception):
@@ -278,6 +282,7 @@ class ColorAcceptance:
         aggregate: bool = False,
         percentage: bool = False,
         float_percentage: bool = False,
+        show_cell_bars: bool = False,
         rules: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Create an owned draft and a matching native Chart Data request."""
@@ -325,7 +330,7 @@ class ColorAcceptance:
             "percent_metrics": [percent_metric] if percentage else [],
             "percent_metric_calculation": "all_records" if percentage else "row_limit",
             "show_totals": percentage,
-            "show_cell_bars": False,
+            "show_cell_bars": show_cell_bars,
             "time_range": "No filter",
             "time_compare": [],
             "comparison_type": "values",
@@ -336,6 +341,8 @@ class ColorAcceptance:
             "_color_acceptance_run": self.run_id,
             "_color_acceptance_case": uuid.uuid4().hex,
         }
+        if show_cell_bars:
+            form_data.update(align_pn=True, color_pn=True)
         key = self.create_draft(form_data, self.chart.datasource_id, self.chart.id)
         filters = [{"col": "sale_id", "op": "<=", "val": rows}]
         query = {
@@ -574,6 +581,236 @@ class ColorAcceptance:
         )
         self.check_xlsx(payload, original, baseline, expected_paints)
 
+    @staticmethod
+    def cell_bar_theme() -> dict[str, str]:
+        """Read configured display tokens without using the color-style resolver."""
+        from superset.views.base import (  # pylint: disable=import-outside-toplevel
+            get_theme_bootstrap_data,
+        )
+
+        tokens = get_theme_bootstrap_data()["theme"]["default"].get("token") or {}
+        return {
+            key: tokens.get(key, fallback)
+            for key, fallback in (
+                ("colorSuccess", "#5ac189"),
+                ("colorWarning", "#fcc700"),
+                ("colorError", "#e04355"),
+            )
+        }
+
+    @staticmethod
+    def expected_default_bars(
+        baseline: list[dict[str, Any]], server: bool, theme: dict[str, str]
+    ) -> list[dict[str, Any]]:
+        """Freeze native signed-bar geometry in each original pagination context."""
+        expected: list[dict[str, Any]] = []
+        page_size = 20 if server else len(baseline)
+        for offset in range(0, len(baseline), page_size):
+            page = baseline[offset : offset + page_size]
+            maxima = {
+                column: max(abs(float(row[column])) for row in page)
+                for column in ("sale_id", "quantity", "revenue")
+            }
+            for row in page:
+                paint: dict[str, Any] = {column: {"colors": []} for column in row}
+                for column, maximum in maxima.items():
+                    if not maximum:
+                        continue
+                    value = float(row[column])
+                    width = abs(math.floor(value / maximum * 100 + 0.5))
+                    if width:
+                        scheme = "colorError" if value < 0 else "colorSuccess"
+                        paint[column]["cellBar"] = {
+                            "color": theme[scheme] + "50",
+                            "width": width,
+                            "offset": 0,
+                            "min": 0,
+                            "max": maximum,
+                        }
+                expected.append(paint)
+        return expected
+
+    def check_cell_bar_snapshot(
+        self,
+        payload: dict[str, Any],
+        original: dict[str, Any],
+        baseline: list[dict[str, Any]],
+        expected_paints: list[dict[str, Any]],
+        case_id: str,
+        export_colors: list[str],
+    ) -> None:
+        """Select, clear and export frozen paints without indexing default bars."""
+        metadata = original["table_color_metadata"]
+        expected_catalog = {
+            column: [
+                color
+                for color in ("GREEN", "YELLOW", "RED")
+                if any(color in paint[column]["colors"] for paint in expected_paints)
+            ]
+            for column in baseline[0]
+        }
+        require(metadata["catalog"] == expected_catalog, "cell-bar catalog differs")
+        require(
+            metadata["capabilities"]["revenue"] == {"enabled": True, "supported": True},
+            "enabled cell-bar target lost its filter capability",
+        )
+        before = self.counter.count
+        selected_counts = []
+        for colors in (["GREEN"], ["YELLOW"], ["RED"], ["GREEN", "YELLOW", "RED"], []):
+            indices = [
+                index
+                for index, paint in enumerate(expected_paints)
+                if not colors or set(colors) & set(paint["revenue"]["colors"])
+            ]
+            selections = [{"column": "revenue", "colors": colors}] if colors else []
+            selected_payload = self.request_for(
+                payload, metadata["snapshot_id"], selections
+            )
+            selected = self.primary(self.query(selected_payload))
+            selected_metadata = selected["table_color_metadata"]
+            require(
+                selected_metadata["snapshot_id"] == metadata["snapshot_id"]
+                and selected_metadata["catalog"] == expected_catalog,
+                "cell-bar interaction replaced the baseline snapshot or catalog",
+            )
+            rows, paints = self.complete(selected_payload, selected)
+            require(
+                rows == [baseline[index] for index in indices],
+                "cell-bar filtering disagrees with explicit formatter matches",
+            )
+            require(
+                paints == [expected_paints[index] for index in indices],
+                "cell-bar filtering changed frozen native paint or geometry",
+            )
+            selected_counts.append(len(rows))
+        exported = self.request_for(
+            payload,
+            metadata["snapshot_id"],
+            [{"column": "revenue", "colors": export_colors}] if export_colors else [],
+        )
+        exported.update(
+            result_format="xlsx",
+            result_type="results",
+            result_format_options={"styled": True},
+        )
+        expected_rows = [
+            row
+            for row, paint in zip(baseline, expected_paints, strict=True)
+            if not export_colors or set(export_colors) & set(paint["revenue"]["colors"])
+        ]
+        self.assert_xlsx(
+            self.query(exported),
+            expected_rows,
+            {
+                row["sale_id"]: paint
+                for row, paint in zip(baseline, expected_paints, strict=True)
+            },
+        )
+        self.check_zero_new_sql(before)
+        mode = "SERVER" if payload["form_data"]["server_pagination"] else "CLIENT"
+        self.record(
+            f"{case_id}_{mode}",
+            baseline_rows=len(baseline),
+            selected_counts=selected_counts,
+            exported_rows=len(expected_rows),
+        )
+
+    def check_formatted_cell_bars(
+        self,
+        server: bool,
+        baseline: list[dict[str, Any]],
+        default_paints: list[dict[str, Any]],
+        theme: dict[str, str],
+        *,
+        mixed: bool,
+    ) -> None:
+        """Separate explicit bars from default bars and text/background paint."""
+        rules = [
+            self.rule(
+                "revenue",
+                "colorWarning",
+                ">",
+                100,
+                objectFormatting="TEXT_COLOR" if mixed else "CELL_BAR",
+            )
+        ]
+        if mixed:
+            rules.append(
+                self.rule(
+                    "revenue",
+                    "colorError",
+                    "<",
+                    0,
+                    objectFormatting="BACKGROUND_COLOR",
+                )
+            )
+        payload = self.make_payload(server=server, show_cell_bars=True, rules=rules)
+        original = self.primary(self.query(payload))
+        rows, paints = self.complete(payload, original)
+        require(rows == baseline, "cell-bar formatting changed source rows")
+        expected = copy.deepcopy(default_paints)
+        red, green, blue = ImageColor.getcolor(theme["colorWarning"], "RGB")
+        for row, row_paint in zip(baseline, expected, strict=True):
+            paint = row_paint["revenue"]
+            if mixed and row["revenue"] < 0:
+                paint.update(backgroundColor=theme["colorError"], colors=["RED"])
+                paint.pop("cellBar", None)
+            if row["revenue"] > 100:
+                if mixed:
+                    paint.update(
+                        textColor=f"rgb({red}, {green}, {blue})", colors=["YELLOW"]
+                    )
+                elif "cellBar" in paint:
+                    # The native renderer removes the suffix even for solid colors.
+                    paint["cellBar"]["color"] = theme["colorWarning"][:-2] + "99"
+                    paint["colors"] = ["YELLOW"]
+        require(paints == expected, "conditional formatting changed native cell bars")
+        self.check_cell_bar_snapshot(
+            payload,
+            original,
+            baseline,
+            expected,
+            "MIXED_DEFAULT_CELL_BARS" if mixed else "EXPLICIT_CELL_BARS",
+            ["YELLOW", "RED"] if mixed else ["YELLOW"],
+        )
+
+    def check_cell_bars(self, server: bool) -> None:
+        """Keep default bars visible but require matching explicit filter colors."""
+        native_payload = self.make_payload(server=server, show_cell_bars=True, rules=[])
+        native = self.native_rows(native_payload, 180)
+        self.query(native_payload, 400, "TABLE_COLOR_FILTER_INVALID")
+        require(
+            any(row["revenue"] < 0 for row in native)
+            and any(0 < row["revenue"] <= 100 for row in native)
+            and any(row["revenue"] > 100 for row in native),
+            "cell-bar fixture lacks matched and unmatched signed values",
+        )
+        payload = self.make_payload(
+            server=server,
+            show_cell_bars=True,
+            rules=[
+                self.rule(
+                    "revenue", "colorWarning", "is null", objectFormatting="CELL_BAR"
+                )
+            ],
+        )
+        original = self.primary(self.query(payload))
+        baseline, paints = self.complete(payload, original)
+        require(baseline == native, "default bars changed ordinary native rows")
+        theme = self.cell_bar_theme()
+        expected = self.expected_default_bars(baseline, server, theme)
+        require(
+            paints == expected,
+            "unmatched rule indexed default bars or changed their native painting",
+        )
+        self.check_cell_bar_snapshot(
+            payload, original, baseline, expected, "DEFAULT_ONLY_CELL_BARS", []
+        )
+        for mixed in (False, True):
+            self.check_formatted_cell_bars(
+                server, baseline, expected, theme, mixed=mixed
+            )
+
     def check_xlsx(
         self,
         payload: dict[str, Any],
@@ -652,6 +889,12 @@ class ColorAcceptance:
         workbook = load_workbook(BytesIO(response.content))
         sheet = workbook.worksheets[0]
         header = [cell.value for cell in sheet[1]]
+        data_bars = {
+            str(conditional.sqref): rule.dataBar
+            for conditional in sheet.conditional_formatting
+            for rule in sheet.conditional_formatting[conditional]
+            if rule.type == "dataBar"
+        }
         require(
             sheet.max_row - 1 == len(expected), "XLSX exported a different row count"
         )
@@ -665,15 +908,44 @@ class ColorAcceptance:
                 actual == expected_row, "XLSX row values differ from selected snapshot"
             )
             for name, cell in zip(header, cells, strict=True):
-                background = paints[expected_row["sale_id"]][str(name)].get(
-                    "backgroundColor"
+                ColorAcceptance.assert_xlsx_cell_paint(
+                    cell,
+                    paints[expected_row["sale_id"]][str(name)],
+                    data_bars.get(cell.coordinate),
                 )
-                if background:
-                    red, green, blue = ImageColor.getrgb(background)
-                    require(
-                        cell.fill.fgColor.rgb == f"FF{red:02X}{green:02X}{blue:02X}",
-                        "XLSX fill differs from final native palette",
-                    )
+
+    @staticmethod
+    def assert_xlsx_cell_paint(
+        cell: Cell, paint: dict[str, Any], data_bar: DataBar | None
+    ) -> None:
+        """Check explicit text/fills and both default and explicit frozen bar scales."""
+        for css_key, actual in (
+            ("backgroundColor", cell.fill.fgColor),
+            ("textColor", cell.font.color),
+        ):
+            if color := paint.get(css_key):
+                red, green, blue = ImageColor.getcolor(color, "RGB")
+                require(
+                    actual is not None
+                    and actual.rgb == f"FF{red:02X}{green:02X}{blue:02X}",
+                    "XLSX text or fill differs from final native palette",
+                )
+        if bar := paint.get("cellBar"):
+            require(data_bar is not None, "XLSX omitted a visible frozen cell bar")
+            assert data_bar is not None
+            red, green, blue = ImageColor.getcolor(bar["color"], "RGB")
+            require(
+                data_bar.color.rgb == f"FF{red:02X}{green:02X}{blue:02X}",
+                "XLSX bar color differs from frozen native painting",
+            )
+            require(len(data_bar.cfvo) == 2, "XLSX bar bounds are absent")
+            for bound, key in zip(data_bar.cfvo, ("min", "max"), strict=True):
+                require(
+                    bound.type == "num" and math.isclose(bound.val, bar[key]),
+                    "XLSX recalculated the frozen baseline bar scale",
+                )
+        else:
+            require(data_bar is None, "XLSX added an absent or suppressed cell bar")
 
     def check_capacity(self, server: bool, rows: int) -> None:
         """Check actual candidate rows around the approved 1,000-result budget."""
@@ -1166,14 +1438,19 @@ class ColorAcceptance:
             )
         self.record("CLEANUP", deleted_drafts=deleted, saved_charts_changed=0)
 
-    def run(self, smoke: bool = False) -> None:
+    def run(self, smoke: bool = False, cell_bars_only: bool = False) -> None:
         """Run real cases, preserving cleanup even if an assertion fails."""
         with self.counter.observe(self.chart.engine_spec):
             try:
+                if cell_bars_only:
+                    for server in (False, True):
+                        self.check_cell_bars(server)
+                    return
                 self.check_raw(False)
                 if not smoke:
                     self.check_raw(True)
                     for server in (False, True):
+                        self.check_cell_bars(server)
                         for rows in (999, 1000, 1001):
                             self.check_capacity(server, rows)
                         self.check_aggregate(server)
@@ -1192,7 +1469,9 @@ def main() -> int:
     parser.add_argument("--base-url", default="http://127.0.0.1:8088")
     parser.add_argument("--chart-id", type=int, default=3)
     parser.add_argument("--username", default="admin")
-    parser.add_argument("--smoke", action="store_true")
+    scope = parser.add_mutually_exclusive_group()
+    scope.add_argument("--smoke", action="store_true")
+    scope.add_argument("--cell-bars-only", action="store_true")
     args = parser.parse_args()
     endpoint = urlparse(args.base_url)
     require(
@@ -1252,7 +1531,7 @@ def main() -> int:
         )
         api = LocalApi(app, user.id, args.base_url, args.transport)
         suite = ColorAcceptance(api, source_chart)
-        suite.run(smoke=args.smoke)
+        suite.run(smoke=args.smoke, cell_bars_only=args.cell_bars_only)
         print(
             json.dumps(
                 {
