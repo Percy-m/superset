@@ -1044,3 +1044,17 @@ fixture，不得继续 UI/API 测试。
 - [ ] `pre-commit run --all-files` 在 push 前通过；
 - [ ] `git diff --check` 通过；
 - [ ] 设计文档、实施计划、代码和测试追踪矩阵一致。
+
+## 14. FR-04 导出边界补充
+
+- 无 Tab 的 Dashboard：导出弹窗提供默认选中的 `Entire dashboard`，
+  请求沿用 `tabIds: ["ROOT_ID"]`。后端仅在保存的布局不存在任何 `TAB` 时允许该值，
+  从根节点按布局顺序收集 Table；有 Tab 时仍须显式选择 Tab。
+- 单表 XLSX：图表导出接口和仅含一张 Table 的 Dashboard 工作簿统一命名为
+  `{图表标题}_{yyyyMMddHHmmss}.xlsx`，时间取服务端本地导出时间。
+  客户端分页的 `Export Current View` 使用相同格式，时间取浏览器本地时间。
+  中文、emoji 和空格保留；文件名非法字符与控制字符替换为 `_`，空标题回退为 `chart`。
+  响应使用标准下载头编码保留 Unicode 标题。多表 Dashboard 文件名和 CSV 命名不变。
+- 回归用例覆盖：真实 FR-01 无 Tab 布局的默认选择与请求体、异步布局初始化、
+  有 Tab 时拒绝根节点选择、单表/多表命名、中文与非法字符、时间补零、
+  图表下载响应的文件名和数据不变。
