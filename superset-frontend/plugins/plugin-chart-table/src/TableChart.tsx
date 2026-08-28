@@ -68,6 +68,7 @@ import {
   Dropdown,
   Icons,
   Tooltip,
+  Typography,
 } from '@superset-ui/core/components';
 import {
   CheckOutlined,
@@ -178,11 +179,6 @@ const VisuallyHidden = styled.label`
   border: 0;
 `;
 
-const AlertColorLabelContent = styled.span`
-  display: inline-flex;
-  align-items: center;
-`;
-
 const CellBar = styled.div<{ barPaint?: TableCellPaint['cellBar'] }>`
   position: absolute;
   height: 100%;
@@ -211,9 +207,11 @@ const AlertColorSwatch = styled.span<{ swatchColor: string }>`
 function AlertColorMenuLabel({
   disabled,
   colorKey,
+  count,
 }: {
   disabled: boolean;
   colorKey: TablePaintColor;
+  count?: number;
 }) {
   const theme = useTheme();
   const presentations = {
@@ -237,16 +235,38 @@ function AlertColorMenuLabel({
     }
   >;
   const { color, label } = presentations[colorKey];
+  const hasCount = count !== undefined && Number.isInteger(count) && count >= 0;
 
   return (
-    <AlertColorLabelContent>
-      <AlertColorSwatch
-        aria-hidden
-        data-test={`alert-color-swatch-${colorKey.toLowerCase()}`}
-        swatchColor={disabled ? theme.colorTextDisabled : color}
-      />
-      <VisuallyHidden as="span">{label}</VisuallyHidden>
-    </AlertColorLabelContent>
+    <>
+      <Space size="small">
+        <AlertColorSwatch
+          aria-hidden
+          data-test={`alert-color-swatch-${colorKey.toLowerCase()}`}
+          swatchColor={disabled ? theme.colorTextDisabled : color}
+        />
+        {hasCount && (
+          <Typography.Text
+            aria-hidden
+            type="secondary"
+            data-test={`alert-color-count-${colorKey.toLowerCase()}`}
+          >
+            ({count})
+          </Typography.Text>
+        )}
+      </Space>
+      <VisuallyHidden as="span">
+        {hasCount
+          ? tn(
+              '%s, %s row before color filtering',
+              '%s, %s rows before color filtering',
+              count,
+              label,
+              count,
+            )
+          : label}
+      </VisuallyHidden>
+    </>
   );
 }
 
@@ -541,6 +561,13 @@ export default function TableChart<D extends DataRecord = DataRecord>(
                   <AlertColorMenuLabel
                     disabled={!supported}
                     colorKey={colorKey}
+                    count={
+                      ready && supported && !tableColorMetadata.request_error
+                        ? tableColorMetadata.color_counts?.[columnKey]?.[
+                            colorKey
+                          ]
+                        : undefined
+                    }
                   />
                 ),
                 disabled: !supported,

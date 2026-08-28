@@ -43,6 +43,7 @@ def _export(rows: list[dict[str, Any]], styles: list[dict[str, Any]]) -> dict[st
         "display_columns": list(rows[0]),
         "display_coltypes": [0] * len(rows[0]),
         "records": rows,
+        "styles": styles,
         "snapshot_id": "test-snapshot",
         "generation": "test-generation",
         "source_page_size": 20,

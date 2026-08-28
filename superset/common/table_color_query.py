@@ -44,6 +44,7 @@ from superset.common.table_color_schema import (
 )
 from superset.common.table_color_snapshot import (
     ColorSnapshotBudget,
+    count_color_rows,
     select_color_rows,
     TableColorSnapshotStore,
     unavailable_cache,
@@ -630,6 +631,9 @@ class TableColorQueryProcessor:
                 "row_indices": selected[offset:stop],
                 "theme_mode": snapshot.get("theme_mode", "default"),
                 "catalog": snapshot["catalog"],
+                "color_counts": count_color_rows(
+                    snapshot["styles"], snapshot["catalog"]
+                ),
                 "capabilities": snapshot["capabilities"],
                 "styles": display_styles[offset:stop],
                 "expires_in": max(0, math.ceil(snapshot["expires_at"] - time.time())),
@@ -708,6 +712,9 @@ class TableColorQueryProcessor:
                     "row_indices": row_indices,
                     "theme_mode": snapshot.get("theme_mode", "default"),
                     "catalog": snapshot["catalog"],
+                    "color_counts": count_color_rows(
+                        snapshot["styles"], snapshot["catalog"]
+                    ),
                     "capabilities": snapshot["capabilities"],
                     "selections": self.selections,
                     "expires_in": max(

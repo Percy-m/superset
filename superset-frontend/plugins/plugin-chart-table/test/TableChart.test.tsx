@@ -243,6 +243,216 @@ test('color menu uses color swatches without business-level labels', async () =>
   }
 });
 
+test.each([false, true])(
+  'color counts use the complete baseline with server pagination %s',
+  async serverPagination => {
+    const previousFlags = window.featureFlags;
+    window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
+    const setDataMask = jest.fn();
+    try {
+      const props = colorProps(setDataMask, serverPagination);
+      props.tableColorMetadata = {
+        ...colorMetadata,
+        baseline_rowcount: 24,
+        filtered_rowcount: 24,
+        color_counts: { sum__num: { GREEN: 20, YELLOW: 3, RED: 1 } },
+      };
+      render(
+        <ProviderWrapper>
+          <TableChart {...props} sticky={false} />
+        </ProviderWrapper>,
+      );
+      fireEvent.click(screen.getByLabelText('Filter by color for sum__num'));
+      const green = await screen.findByRole('menuitemcheckbox', {
+        name: 'Green, 20 rows before color filtering',
+      });
+      const count = within(green).getByTestId('alert-color-count-green');
+      expect(count).toHaveTextContent('(20)');
+      expect(count).not.toHaveAttribute('title');
+      expect(screen.getByTestId('alert-color-count-yellow')).toHaveTextContent(
+        '(3)',
+      );
+      expect(screen.getByTestId('alert-color-count-red')).toHaveTextContent(
+        '(1)',
+      );
+      fireEvent.click(count);
+      expect(setDataMask).toHaveBeenLastCalledWith({
+        ownState: expect.objectContaining({
+          alertFilter: expect.objectContaining({
+            selections: [{ column: 'sum__num', colors: ['GREEN'] }],
+          }),
+        }),
+      });
+      fireEvent.click(screen.getByLabelText('Filter by color for sum__num'));
+      expect(
+        await screen.findByRole('menuitemcheckbox', {
+          name: 'Green, 20 rows before color filtering',
+        }),
+      ).toHaveAttribute('aria-checked', 'true');
+      expect(screen.getByTestId('alert-color-count-green')).toHaveTextContent(
+        '(20)',
+      );
+      expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+    } finally {
+      window.featureFlags = previousFlags;
+    }
+  },
+);
+
+test.each([undefined, -1, 1.5, Number.NaN])(
+  'missing or invalid color count %s is not presented as zero',
+  async count => {
+    const previousFlags = window.featureFlags;
+    window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
+    try {
+      const props = colorProps();
+      props.tableColorMetadata = {
+        ...colorMetadata,
+        color_counts: { sum__num: { GREEN: count } },
+      };
+      render(
+        <ProviderWrapper>
+          <TableChart {...props} sticky={false} />
+        </ProviderWrapper>,
+      );
+      fireEvent.click(screen.getByLabelText('Filter by color for sum__num'));
+      await waitFor(() =>
+        expect(
+          screen.getByRole('menuitemcheckbox', { name: 'Green' }),
+        ).toBeVisible(),
+      );
+      expect(
+        screen.queryByTestId('alert-color-count-green'),
+      ).not.toBeInTheDocument();
+    } finally {
+      window.featureFlags = previousFlags;
+    }
+  },
+);
+
+test.each(['unsupported', 'request_error'])(
+  'color counts are hidden for %s metadata',
+  async state => {
+    const previousFlags = window.featureFlags;
+    window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
+    try {
+      const props = colorProps();
+      props.tableColorMetadata = {
+        ...colorMetadata,
+        color_counts: { sum__num: { GREEN: 8 } },
+        ...(state === 'request_error'
+          ? {
+              request_error:
+                'The color-filter result expired. Reload the chart.',
+            }
+          : {
+              capabilities: {
+                sum__num: {
+                  enabled: true,
+                  supported: false,
+                  reason: {
+                    code: 'TABLE_COLOR_FILTER_GRADIENT_UNSUPPORTED',
+                    message: 'Gradient color filtering is not supported.',
+                  },
+                },
+              },
+            }),
+      };
+      render(
+        <ProviderWrapper>
+          <TableChart {...props} sticky={false} />
+        </ProviderWrapper>,
+      );
+      fireEvent.click(screen.getByLabelText('Filter by color for sum__num'));
+      await screen.findByRole('menuitemcheckbox', { name: 'Green' });
+      expect(
+        screen.queryByTestId('alert-color-count-green'),
+      ).not.toBeInTheDocument();
+    } finally {
+      window.featureFlags = previousFlags;
+    }
+  },
+);
+
+test('color counts update when the baseline snapshot changes', async () => {
+  const previousFlags = window.featureFlags;
+  window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
+  try {
+    const props = colorProps();
+    props.tableColorMetadata = {
+      ...colorMetadata,
+      color_counts: { sum__num: { GREEN: 8 } },
+    };
+    const { rerender } = render(
+      <ProviderWrapper>
+        <TableChart {...props} sticky={false} />
+      </ProviderWrapper>,
+    );
+    fireEvent.click(screen.getByLabelText('Filter by color for sum__num'));
+    expect(
+      await screen.findByTestId('alert-color-count-green'),
+    ).toHaveTextContent('(8)');
+    rerender(
+      <ProviderWrapper>
+        <TableChart
+          {...props}
+          sticky={false}
+          tableColorMetadata={{
+            ...colorMetadata,
+            generation: 'generation-2',
+            snapshot_id: 'snapshot-2',
+            color_counts: { sum__num: { GREEN: 1 } },
+          }}
+        />
+      </ProviderWrapper>,
+    );
+    fireEvent.click(screen.getByLabelText('Filter by color for sum__num'));
+    expect(
+      await screen.findByTestId('alert-color-count-green'),
+    ).toHaveTextContent('(1)');
+    await waitFor(() =>
+      expect(
+        screen.getByRole('menuitemcheckbox', {
+          name: 'Green, 1 row before color filtering',
+        }),
+      ).toBeVisible(),
+    );
+  } finally {
+    window.featureFlags = previousFlags;
+  }
+});
+
+test('a retained selected color absent from the catalog shows its actual zero count', async () => {
+  const previousFlags = window.featureFlags;
+  window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
+  try {
+    const props = colorProps();
+    props.tableColorMetadata = {
+      ...colorMetadata,
+      filtered_rowcount: 0,
+      catalog: { sum__num: ['GREEN'] },
+      color_counts: { sum__num: { GREEN: 10, YELLOW: 0, RED: 0 } },
+      selections: [{ column: 'sum__num', colors: ['RED'] }],
+    };
+    render(
+      <ProviderWrapper>
+        <TableChart {...props} sticky={false} />
+      </ProviderWrapper>,
+    );
+    fireEvent.click(screen.getByLabelText('Filter by color for sum__num'));
+    expect(
+      await screen.findByRole('menuitemcheckbox', {
+        name: 'Red, 0 rows before color filtering',
+      }),
+    ).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByTestId('alert-color-count-red')).toHaveTextContent(
+      '(0)',
+    );
+  } finally {
+    window.featureFlags = previousFlags;
+  }
+});
+
 test.each(['Green', 'Yellow', 'Red'])(
   '%s color swatch never leaves a hover or focus tooltip and remains selectable',
   async name => {
@@ -250,20 +460,33 @@ test.each(['Green', 'Yellow', 'Red'])(
     window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
     jest.useFakeTimers();
     const setDataMask = jest.fn();
+    const accessibleName = `${name}, 20 rows before color filtering`;
     try {
+      const props = colorProps(setDataMask);
+      props.tableColorMetadata = {
+        ...colorMetadata,
+        baseline_rowcount: 60,
+        filtered_rowcount: 60,
+        color_counts: { sum__num: { GREEN: 20, YELLOW: 20, RED: 20 } },
+      };
       render(
         <ProviderWrapper>
-          <TableChart {...colorProps(setDataMask)} sticky={false} />
+          <TableChart {...props} sticky={false} />
         </ProviderWrapper>,
       );
       fireEvent.click(screen.getByLabelText('Filter by color for sum__num'));
-      const item = await screen.findByRole('menuitemcheckbox', { name });
+      const item = await screen.findByRole('menuitemcheckbox', {
+        name: accessibleName,
+      });
       const swatch = within(item).getByTestId(
         `alert-color-swatch-${name.toLowerCase()}`,
       );
       expect(item).toHaveAttribute('aria-checked', 'false');
       expect(swatch).not.toHaveAttribute('title');
       fireEvent.mouseEnter(swatch);
+      fireEvent.mouseEnter(
+        within(item).getByTestId(`alert-color-count-${name.toLowerCase()}`),
+      );
       fireEvent.focus(item);
       act(() => jest.advanceTimersByTime(1000));
       expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
@@ -285,7 +508,7 @@ test.each(['Green', 'Yellow', 'Red'])(
 
       fireEvent.click(screen.getByLabelText('Filter by color for sum__num'));
       expect(
-        await screen.findByRole('menuitemcheckbox', { name }),
+        await screen.findByRole('menuitemcheckbox', { name: accessibleName }),
       ).toHaveAttribute('aria-checked', 'true');
       act(() => jest.advanceTimersByTime(1000));
       expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();

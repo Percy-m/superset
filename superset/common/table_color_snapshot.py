@@ -24,12 +24,13 @@ import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Iterator, Sequence
+from typing import Any, Iterable, Iterator, Sequence
 
 from flask import current_app
 
 from superset.common.table_color_context import access_denied
 from superset.common.table_color_schema import (
+    COLOR_ORDER,
     TableColorFilterError,
     TableColorSelection,
 )
@@ -124,6 +125,20 @@ def _encode(value: object) -> bytes:
     return json.dumps(
         value, default=json.json_int_dttm_ser, ignore_nan=True, ensure_ascii=False
     ).encode("utf-8")
+
+
+def count_color_rows(
+    styles: Sequence[dict[str, Any]], columns: Iterable[str]
+) -> dict[str, dict[str, int]]:
+    """Count each final color once per baseline row in each visible column."""
+    counts = {column: dict.fromkeys(COLOR_ORDER, 0) for column in columns}
+    for row in styles:
+        for column, paint in row.items():
+            if column in counts:
+                for color in set(paint.get("colors", [])):
+                    if color in counts[column]:
+                        counts[column][color] += 1
+    return counts
 
 
 def select_color_rows(

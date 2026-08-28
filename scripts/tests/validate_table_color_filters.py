@@ -208,6 +208,7 @@ class ColorAcceptance:
         self.drafts: list[str] = []
         self.counter = FixtureQueryCounter()
         self.outcomes: list[dict[str, Any]] = []
+        self.snapshot_color_counts: dict[str, dict[str, dict[str, int]]] = {}
         self.saved_fingerprint = self._fingerprint()
         self.protected_charts = {chart.id: self.saved_fingerprint}
 
@@ -417,7 +418,24 @@ class ColorAcceptance:
         )
         if code:
             require(actual_code == code, "unexpected structured error code")
+        if response.status == 200:
+            for result in response.body.get("result", []):
+                self.check_frozen_color_counts(result)
         return response
+
+    def check_frozen_color_counts(self, primary: dict[str, Any]) -> None:
+        """Keep full-baseline counts fixed across all snapshot JSON responses."""
+        metadata = primary.get("table_color_metadata", {})
+        if metadata.get("status") != "ready":
+            return
+        counts = metadata.get("color_counts")
+        require(isinstance(counts, dict), "baseline color counts missing")
+        assert isinstance(counts, dict)
+        require(
+            counts
+            == self.snapshot_color_counts.setdefault(metadata["snapshot_id"], counts),
+            "selection, paging or export changed frozen baseline color counts",
+        )
 
     @staticmethod
     def primary(response: ApiResponse) -> dict[str, Any]:
@@ -496,7 +514,11 @@ class ColorAcceptance:
 
     def check_raw(self, server: bool) -> None:
         """Verify both pagination modes, all three palettes and cross-column AND."""
-        payload = self.make_payload(server=server)
+        rules = self.raw_rules()
+        rules.append(
+            self.rule("quantity", "colorSuccess", ">", 4, objectFormatting="TEXT_COLOR")
+        )
+        payload = self.make_payload(server=server, rules=rules)
         before_build = self.counter.count
         original = self.primary(self.query(payload))
         after_build = self.counter.count
@@ -522,6 +544,28 @@ class ColorAcceptance:
                 if row["revenue"] <= 100
                 else "GREEN"
             )
+
+        expected_counts = {
+            column: dict.fromkeys(("GREEN", "YELLOW", "RED"), 0)
+            for column in baseline[0]
+        }
+        for row in baseline:
+            expected_counts["revenue"][palette(row)] += 1
+            expected_counts["quantity"]["GREEN"] += row["quantity"] > 4
+            expected_counts["region"]["YELLOW"] += row["region"].startswith("A")
+        require(
+            metadata["color_counts"] == expected_counts,
+            "raw counts disagree with independent full-baseline predicates",
+        )
+        require(
+            any(
+                paint["quantity"].get("backgroundColor")
+                and paint["quantity"].get("textColor")
+                and paint["quantity"]["colors"] == ["GREEN"]
+                for paint in paints
+            ),
+            "raw fixture did not cover same-color text/background deduplication",
+        )
 
         selections_to_check = [
             (["GREEN"], False),
@@ -641,14 +685,23 @@ class ColorAcceptance:
     ) -> None:
         """Select, clear and export frozen paints without indexing default bars."""
         metadata = original["table_color_metadata"]
-        expected_catalog = {
-            column: [
-                color
+        expected_counts = {
+            column: {
+                color: sum(
+                    color in paint[column]["colors"] for paint in expected_paints
+                )
                 for color in ("GREEN", "YELLOW", "RED")
-                if any(color in paint[column]["colors"] for paint in expected_paints)
-            ]
+            }
             for column in baseline[0]
         }
+        expected_catalog = {
+            column: [color for color, count in counts.items() if count]
+            for column, counts in expected_counts.items()
+        }
+        require(
+            metadata["color_counts"] == expected_counts,
+            "cell-bar counts disagree with independently verified baseline paint",
+        )
         require(metadata["catalog"] == expected_catalog, "cell-bar catalog differs")
         require(
             metadata["capabilities"]["revenue"] == {"enabled": True, "supported": True},
@@ -706,6 +759,7 @@ class ColorAcceptance:
                 for row, paint in zip(baseline, expected_paints, strict=True)
             },
         )
+        self.query(self.request_for(payload, metadata["snapshot_id"], []))
         self.check_zero_new_sql(before)
         mode = "SERVER" if payload["form_data"]["server_pagination"] else "CLIENT"
         self.record(
@@ -867,6 +921,11 @@ class ColorAcceptance:
         )
         rejected["queries"][0]["table_color_filter"]["view_rows"] = [unselected]
         self.query(rejected, 400, "TABLE_COLOR_FILTER_INVALID")
+        self.query(
+            self.request_for(
+                payload, original["table_color_metadata"]["snapshot_id"], []
+            )
+        )
         self.check_zero_new_sql(before)
         self.record(
             f"CURRENT_VIEW_XLSX_{mode}",
@@ -1397,6 +1456,7 @@ class ColorAcceptance:
         response = peer.request("POST", "/api/v1/chart/data", selected_payload)
         require(response.status == 200, "another worker could not read the snapshot")
         primary = self.primary(response)
+        self.check_frozen_color_counts(primary)
         indices = [
             index for index, row in enumerate(original["data"]) if row["revenue"] > 100
         ]

@@ -79,6 +79,8 @@ export type TableColorMetadata =
       row_indices?: number[];
       theme_mode?: 'default' | 'dark';
       catalog: Record<string, TablePaintColor[]>;
+      /** Complete baseline row counts, before color selections and pagination. */
+      color_counts?: Record<string, Partial<Record<TablePaintColor, number>>>;
       capabilities: Record<string, ColumnFilterCapability>;
       styles: Record<string, TableCellPaint>[];
       expires_in: number;

@@ -32,6 +32,7 @@ from superset.common.table_color_schema import (
 )
 from superset.common.table_color_snapshot import (
     ColorSnapshotBudget,
+    count_color_rows,
     PREFIX,
     select_color_rows,
     TableColorSnapshotStore,
@@ -301,6 +302,39 @@ def test_budget_configuration_caps_timeout_by_webserver_timeout(
         SUPERSET_WEBSERVER_TIMEOUT=20,
     )
     assert ColorSnapshotBudget.from_config().timeout == 20
+
+
+def test_color_counts_deduplicate_each_row_and_keep_overlapping_colors() -> None:
+    """Multiple paints can contribute colors, never duplicate same-color rows."""
+    styles: list[dict[str, Any]] = [
+        {
+            "a": {"colors": ["GREEN", "GREEN", "RED"]},
+            "b": {"colors": ["GREEN"]},
+            "hidden": {"colors": ["YELLOW"]},
+        },
+        {
+            "a": {"colors": ["GREEN", "RED"]},
+            "b": {"colors": ["YELLOW", "YELLOW"]},
+        },
+        {"a": {"colors": []}, "b": {"backgroundColor": "#e04355"}},
+        {"a": {"cellBar": {"color": "#5ac18950"}}},
+        {},
+    ]
+    before = copy.deepcopy(styles)
+    assert count_color_rows(styles, ["a", "b", "unpainted"]) == {
+        "a": {"GREEN": 2, "YELLOW": 0, "RED": 2},
+        "b": {"GREEN": 1, "YELLOW": 1, "RED": 0},
+        "unpainted": {"GREEN": 0, "YELLOW": 0, "RED": 0},
+    }
+    assert styles == before
+
+
+def test_color_counts_include_zero_colors_for_an_empty_baseline() -> None:
+    """Visible columns retain all semantic counts even when no rows are returned."""
+    assert count_color_rows([], ["amount"]) == {
+        "amount": {"GREEN": 0, "YELLOW": 0, "RED": 0}
+    }
+    assert count_color_rows([{"hidden": {"colors": ["GREEN"]}}], []) == {}
 
 
 def test_repeated_selections_include_third_color_without_repainting() -> None:

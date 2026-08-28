@@ -179,10 +179,15 @@ def test_query_color_selection_clear_and_pagination_never_repeat_sql(
     original = harness.result()
     metadata = original["table_color_metadata"]
     assert metadata["baseline_rowcount"] == 6
+    assert metadata["color_counts"] == {
+        "region": {"GREEN": 0, "YELLOW": 0, "RED": 0},
+        "amount": {"GREEN": 3, "YELLOW": 0, "RED": 0},
+    }
     assert len(harness.calls) == 1
     harness.select(metadata["snapshot_id"])
     selected = harness.result()
     assert selected["table_color_metadata"]["filtered_rowcount"] == 3
+    assert selected["table_color_metadata"]["color_counts"] == metadata["color_counts"]
     assert [row["amount"] for row in selected["data"]] == (
         [4, 5] if server else [4, 5, 6]
     )
@@ -195,10 +200,135 @@ def test_query_color_selection_clear_and_pagination_never_repeat_sql(
         last_page = harness.result()
         assert [row["amount"] for row in last_page["data"]] == [6]
         assert last_page["table_color_metadata"]["row_indices"] == [5]
+        assert (
+            last_page["table_color_metadata"]["color_counts"]
+            == metadata["color_counts"]
+        )
     assert harness.context.table_color_filter is not None
     harness.context.table_color_filter["selections"] = []
     harness.context.queries[0].row_offset = 0
-    assert harness.result()["data"] == original["data"]
+    cleared = harness.result()
+    assert cleared["data"] == original["data"]
+    assert cleared["table_color_metadata"]["color_counts"] == metadata["color_counts"]
+    assert len(harness.calls) == 1
+
+
+@pytest.mark.parametrize("server", [False, True])
+def test_color_counts_ignore_selections_in_every_column(
+    app: Flask, monkeypatch: pytest.MonkeyPatch, server: bool
+) -> None:
+    """Every menu counts the complete baseline, including other-column rejects."""
+    harness = ColorQueryHarness(app, monkeypatch, server=server)
+    harness.data["balance"] = [6, 5, 4, 3, 2, 1]
+    harness.form_data["metrics"].append("balance")
+    harness.context.queries[0].metrics = ["amount", "balance"]
+    harness.form_data["conditional_formatting"].append(
+        {
+            **harness.form_data["conditional_formatting"][0],
+            "column": "balance",
+            "operator": "<",
+            "colorScheme": "colorError",
+        }
+    )
+    original = harness.result()["table_color_metadata"]
+    expected = {
+        "region": {"GREEN": 0, "YELLOW": 0, "RED": 0},
+        "amount": {"GREEN": 3, "YELLOW": 0, "RED": 0},
+        "balance": {"GREEN": 0, "YELLOW": 0, "RED": 2},
+    }
+    assert original["color_counts"] == expected
+    harness.select(original["snapshot_id"])
+    assert harness.result()["table_color_metadata"]["color_counts"] == expected
+    assert harness.context.table_color_filter is not None
+    harness.context.table_color_filter["selections"].append(
+        {"column": "balance", "colors": ["RED"]}
+    )
+    selected = harness.result()
+    assert [row["amount"] for row in selected["data"]] == [5, 6]
+    assert selected["table_color_metadata"]["color_counts"] == expected
+    harness.context.table_color_filter["selections"] = [
+        {"column": "balance", "colors": ["GREEN"]}
+    ]
+    empty = harness.result()
+    assert empty["data"] == []
+    assert empty["table_color_metadata"]["color_counts"] == expected
+    assert len(harness.calls) == 1
+
+
+@pytest.mark.parametrize("server", [False, True])
+@pytest.mark.parametrize("rows", [0, 3])
+def test_color_counts_include_zeros_for_empty_or_uncolored_results(
+    app: Flask, monkeypatch: pytest.MonkeyPatch, server: bool, rows: int
+) -> None:
+    """An empty catalog reports real zeros instead of missing-count metadata."""
+    harness = ColorQueryHarness(app, monkeypatch, server=server, rows=rows)
+    metadata = harness.result()["table_color_metadata"]
+    assert metadata["status"] == "ready"
+    assert metadata["color_counts"] == {
+        "region": {"GREEN": 0, "YELLOW": 0, "RED": 0},
+        "amount": {"GREEN": 0, "YELLOW": 0, "RED": 0},
+    }
+    assert len(harness.calls) == 1
+
+
+@pytest.mark.parametrize("server", [False, True])
+def test_color_counts_include_explicit_bars_but_not_default_bars(
+    app: Flask, monkeypatch: pytest.MonkeyPatch, server: bool
+) -> None:
+    """Identical-looking default bars cannot add to explicit formatter counts."""
+    harness = ColorQueryHarness(app, monkeypatch, server=server)
+    harness.form_data["show_cell_bars"] = True
+    harness.form_data["conditional_formatting"][0]["objectFormatting"] = "CELL_BAR"
+    original = harness.result()["table_color_metadata"]
+    assert original["color_counts"]["amount"] == {
+        "GREEN": 3,
+        "YELLOW": 0,
+        "RED": 0,
+    }
+    assert original["styles"][0]["amount"]["cellBar"]
+    assert original["styles"][0]["amount"]["colors"] == []
+    harness.select(original["snapshot_id"])
+    selected = harness.result()["table_color_metadata"]
+    assert selected["filtered_rowcount"] == 3
+    assert selected["color_counts"] == original["color_counts"]
+    assert len(harness.calls) == 1
+
+
+@pytest.mark.parametrize("server", [False, True])
+def test_color_counts_derive_from_old_cached_styles_without_sql_or_repainting(
+    app: Flask, monkeypatch: pytest.MonkeyPatch, server: bool
+) -> None:
+    """Both indexed and ID-based reads support snapshots without stored counts."""
+    harness = ColorQueryHarness(app, monkeypatch, server=server)
+    original = harness.result()["table_color_metadata"]
+    key = f"{table_color_snapshot.PREFIX}{original['snapshot_id']}"
+    legacy = harness.cache.get(key)
+    legacy.pop("color_counts", None)
+    legacy["styles"][0]["amount"]["colors"] = ["RED", "RED"]
+    legacy["catalog"]["amount"].append("RED")
+    assert harness.cache.set(key, legacy, timeout=60)
+    monkeypatch.setattr(
+        table_color_query,
+        "resolve_table_color_styles",
+        Mock(side_effect=AssertionError("Cached rows must not be repainted")),
+    )
+    monkeypatch.setattr(
+        harness.context,
+        "get_df_payload",
+        Mock(side_effect=AssertionError("Cached rows must not repeat SQL")),
+    )
+    expected = {
+        "region": {"GREEN": 0, "YELLOW": 0, "RED": 0},
+        "amount": {"GREEN": 3, "YELLOW": 0, "RED": 1},
+    }
+    indexed = harness.result()["table_color_metadata"]
+    assert indexed["snapshot_id"] == original["snapshot_id"]
+    assert indexed["color_counts"] == expected
+    harness.select(original["snapshot_id"])
+    selected = harness.result()["table_color_metadata"]
+    assert selected["color_counts"] == expected
+    assert selected["filtered_rowcount"] == 3
+    assert harness.cache.get(key) == legacy
     assert len(harness.calls) == 1
 
 
@@ -220,6 +350,7 @@ def test_actual_result_boundary_not_configured_row_limit(
     assert len(result["data"]) == (20 if server else rows)
     if rows > 1000:
         assert "snapshot_id" not in result["table_color_metadata"]
+        assert "color_counts" not in result["table_color_metadata"]
         assert (
             result["table_color_metadata"]["reason"]["code"]
             == "TABLE_COLOR_FILTER_LIMIT_EXCEEDED"
@@ -331,6 +462,41 @@ def test_snapshot_rejects_changed_context_without_querying(
 
 
 @pytest.mark.parametrize("server", [False, True])
+@pytest.mark.parametrize("change", ["query", "rule"])
+def test_color_counts_rebuild_after_base_query_or_rule_change(
+    app: Flask, monkeypatch: pytest.MonkeyPatch, server: bool, change: str
+) -> None:
+    """A new baseline counts its new paints without accepting stale references."""
+    harness = ColorQueryHarness(app, monkeypatch, server=server)
+    original = harness.result()["table_color_metadata"]
+    harness.select(original["snapshot_id"])
+    if change == "query":
+        harness.context.queries[0].filter.append(
+            {"col": "amount", "op": "<=", "val": 4}
+        )
+        harness.data = harness.data[harness.data.amount <= 4]
+    else:
+        harness.form_data["conditional_formatting"][0]["targetValue"] = 1
+    with pytest.raises(TableColorFilterError, match="CONTEXT_CHANGED"):
+        harness.result()
+    assert len(harness.calls) == 1
+    harness.context.table_color_filter = {"version": 2, "selections": []}
+    rebuilt = harness.result()["table_color_metadata"]
+    assert rebuilt["snapshot_id"] != original["snapshot_id"]
+    assert rebuilt["generation"] != original["generation"]
+    assert rebuilt["color_counts"]["amount"] == {
+        "GREEN": 1 if change == "query" else 5,
+        "YELLOW": 0,
+        "RED": 0,
+    }
+    assert (
+        harness.result()["table_color_metadata"]["color_counts"]
+        == rebuilt["color_counts"]
+    )
+    assert len(harness.calls) == 2
+
+
+@pytest.mark.parametrize("server", [False, True])
 def test_snapshot_style_revision_rejects_old_reference_and_rebuilds_catalog(
     app: Flask, monkeypatch: pytest.MonkeyPatch, server: bool
 ) -> None:
@@ -370,29 +536,50 @@ def test_snapshot_owner_is_not_authorized_by_opaque_id(
     assert len(harness.calls) == 1
 
 
+@pytest.mark.parametrize("server", [False, True])
 def test_color_export_returns_all_matches_using_frozen_result(
-    app: Flask, monkeypatch: pytest.MonkeyPatch
+    app: Flask, monkeypatch: pytest.MonkeyPatch, server: bool
 ) -> None:
-    harness = ColorQueryHarness(app, monkeypatch)
-    harness.select(harness.result()["table_color_metadata"]["snapshot_id"])
+    harness = ColorQueryHarness(app, monkeypatch, server=server)
+    harness.form_data["conditional_formatting"].append(
+        {
+            **harness.form_data["conditional_formatting"][0],
+            "operator": "≤",
+            "colorScheme": "colorError",
+        }
+    )
+    original = harness.result()["table_color_metadata"]
+    assert original["color_counts"]["amount"] == {
+        "GREEN": 3,
+        "YELLOW": 0,
+        "RED": 3,
+    }
+    harness.select(original["snapshot_id"])
     harness.context.result_type = ChartDataResultType.RESULTS
     harness.context.queries[0].row_limit = 50000
     exported = harness.result()
     assert [row["amount"] for row in exported["data"]] == [4, 5, 6]
     assert len(exported["table_color_metadata"]["styles"]) == 3
+    assert exported["table_color_metadata"]["color_counts"] == original["color_counts"]
     assert len(harness.calls) == 1
 
 
+@pytest.mark.parametrize("server", [False, True])
 @pytest.mark.parametrize("view_rows, amounts", [([5, 3], [6, 4]), ([], [])])
 def test_current_view_export_projects_frozen_rows_in_client_order(
     app: Flask,
     monkeypatch: pytest.MonkeyPatch,
+    server: bool,
     view_rows: list[int],
     amounts: list[int],
 ) -> None:
-    harness = ColorQueryHarness(app, monkeypatch, server=False)
+    harness = ColorQueryHarness(app, monkeypatch, server=server)
     original = harness.result()
-    harness.select(original["table_color_metadata"]["snapshot_id"])
+    metadata = original["table_color_metadata"]
+    snapshot = harness.cache.get(
+        f"{table_color_snapshot.PREFIX}{metadata['snapshot_id']}"
+    )
+    harness.select(metadata["snapshot_id"])
     harness.context.result_type = ChartDataResultType.RESULTS
     assert harness.context.table_color_filter is not None
     harness.context.table_color_filter["view_rows"] = view_rows
@@ -400,8 +587,9 @@ def test_current_view_export_projects_frozen_rows_in_client_order(
     assert [row["amount"] for row in exported["data"]] == amounts
     assert exported["table_color_metadata"]["row_indices"] == view_rows
     assert exported["table_color_metadata"]["styles"] == [
-        original["table_color_metadata"]["styles"][index] for index in view_rows
+        snapshot["styles"][index] for index in view_rows
     ]
+    assert exported["table_color_metadata"]["color_counts"] == metadata["color_counts"]
     assert len(harness.calls) == 1
 
 
@@ -440,16 +628,20 @@ def test_current_view_schema_rejects_invalid_references(view_rows: list[Any]) ->
         TableColorFilterSchema().load({"version": 2, "view_rows": view_rows})
 
 
+@pytest.mark.parametrize("server", [False, True])
 def test_force_refresh_rebuilds_without_reusing_snapshot(
-    app: Flask, monkeypatch: pytest.MonkeyPatch
+    app: Flask, monkeypatch: pytest.MonkeyPatch, server: bool
 ) -> None:
-    harness = ColorQueryHarness(app, monkeypatch)
-    original_id = harness.result()["table_color_metadata"]["snapshot_id"]
-    harness.select(original_id)
+    harness = ColorQueryHarness(app, monkeypatch, server=server)
+    original = harness.result()["table_color_metadata"]
+    harness.select(original["snapshot_id"])
+    harness.data.loc[5, "amount"] = 1
     harness.context.force = True
     refreshed = harness.result()
-    assert refreshed["table_color_metadata"]["snapshot_id"] != original_id
+    assert refreshed["table_color_metadata"]["snapshot_id"] != original["snapshot_id"]
     assert [row["amount"] for row in refreshed["data"]] == [4, 5]
+    assert original["color_counts"]["amount"]["GREEN"] == 3
+    assert refreshed["table_color_metadata"]["color_counts"]["amount"]["GREEN"] == 2
     assert len(harness.calls) == 2
 
 
@@ -546,5 +738,9 @@ def test_zero_matches_retains_catalog_and_recovers_page_zero(
     assert (
         result["table_color_metadata"]["catalog"]
         == original["table_color_metadata"]["catalog"]
+    )
+    assert (
+        result["table_color_metadata"]["color_counts"]
+        == original["table_color_metadata"]["color_counts"]
     )
     assert len(harness.calls) == 1
