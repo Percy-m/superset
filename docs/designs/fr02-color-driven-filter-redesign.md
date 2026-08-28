@@ -21,7 +21,7 @@ under the License.
 
 | 属性        | 内容                                                                                                        |
 | ----------- | ----------------------------------------------------------------------------------------------------------- |
-| 版本 / 日期 | V1.1 / 2026-08-28；用户确认默认颜色快照上限为 1,000 个结果行                                                |
+| 版本 / 日期 | V1.2 / 2026-08-28；默认快照上限 1,000 行，明确当前视图导出投影与降级边界                                    |
 | 状态        | Proposed；本文件和交互原型不是已上线功能                                                                    |
 | 实现起点    | `dev/6.1`，`9ff15ca9f85beaddfea15283c511022cfa5dd45d`                                                       |
 | 用户确认    | 每条规则的 **Add new formatter** 内仅增加 `Enable alert filter`；用户按颜色选行，实现复用产生最终颜色的规则 |
@@ -327,6 +327,13 @@ count 和 offset 查询优先复用。不得只为探测超限额外执行一次
 应复用已取得的原页/可证明等价的原页结果；无法复用时明确报告失败，保留页面上
 最后一次成功的普通视图，由用户主动刷新。K+1 仅限制返回候选数，不限制数据库扫描。
 
+普通服务端页本身超过 K，或首次访问已有较大 offset 时，候选获取范围为
+`min(R, max(K + 1, offset + P))`，以便同一次基础查询提供原本就需要展示的完整页。
+这不扩大颜色快照预算：实际超过 K 仍只能普通浏览，不发布可筛选的部分快照。
+已知超限的上下文缓存无敏感值的原因，后续普通翻页沿原分页查询执行，不重复探测。
+单元格字节、累计行/单元格数增量检查；不能对每个原始页重新遍历此前所有页。
+加入快照 ID/到期信息后的最终字节检查同样必须保留首次普通浏览降级能力。
+
 多次 SQL 查询不构成数据库一致性事务保证。动态数据刷新明确开启新快照版本；
 同一快照一旦发布不可追加或替换其中某一页，避免旧页与新页拼接。
 
@@ -447,14 +454,16 @@ dashboard ID、图表布局和权限确定，不能信任 Referer 或浏览器�
 
 `table_color_filter` 的新增字段契约：
 
-| 字段          | 约束                                                          |
-| ------------- | ------------------------------------------------------------- |
-| version       | 必须为 2；未提供整个对象时保持原查询路径                      |
-| selections    | 默认空；按列去重；每列 1–3 个已知颜色；最多 100 个目标列      |
-| column        | 结果列 key，最长 1,024 字符；必须存在、可见且有有效入口       |
-| colors        | 仅 GREEN/YELLOW/RED；不接受任意 RGB、业务等级、SQL 或阈值     |
-| snapshot_id   | 可选、不透明、最大 256 字符；归属、上下文及权限均需验证       |
-| form_data_key | 仅 Explore；最大 256 字符；沿用草稿访问控制；不得进入分享状态 |
+| 字段          | 约束                                                                                                               |
+| ------------- | ------------------------------------------------------------------------------------------------------------------ |
+| version       | 必须为 2；未提供整个对象时保持原查询路径                                                                           |
+| selections    | 默认空；按列去重；每列 1–3 个已知颜色；最多 100 个目标列                                                           |
+| column        | 结果列 key，最长 1,024 字符；必须存在、可见且有有效入口                                                            |
+| colors        | 仅 GREEN/YELLOW/RED；不接受任意 RGB、业务等级、SQL 或阈值                                                          |
+| snapshot_id   | 可选、不透明、最大 256 字符；归属、上下文及权限均需验证                                                            |
+| form_data_key | 仅 Explore；最大 256 字符；沿用草稿访问控制；不得进入分享状态                                                      |
+| theme_mode    | default 或 dark，缺省 default；只选择服务端可信主题，不接受客户端 CSS/RGB                                          |
+| view_rows     | 仅当前视图导出可选；已存在快照的非负整数行号数组，保持顺序；重复、越界或非当前颜色命中行返回 400；空数组表示空结果 |
 
 新增独立的嵌套 Marshmallow schema，并设置 `unknown=RAISE`；整个新增对象最大
 64 KiB。重复目标列先合并，颜色去重并按固定顺序规范化；不再静默截断选择列表。
@@ -472,6 +481,9 @@ Alert level SQL 引擎。基础 QueryObject 的合法字段继续遵守原 schem
   "baseline_rowcount": 16,
   "filtered_rowcount": 5,
   "source_page_size": 20,
+  "row_offset": 0,
+  "row_indices": [1, 4, 7, 10, 13],
+  "theme_mode": "default",
   "catalog": { "gross_profit": ["GREEN", "YELLOW", "RED"] },
   "capabilities": { "gross_profit": { "enabled": true, "supported": true } },
   "styles": [],
@@ -482,6 +494,8 @@ Alert level SQL 引擎。基础 QueryObject 的合法字段继续遵守原 schem
 `styles` 与本页数据逐行对齐，含必要的背景/文字/bar/箭头样式及颜色族；不包含
 SQL、规则表达式或其他用户数据。空数组只是结构示意，实际响应长度必须与行数
 一致。count / totals 查询在同一 QueryContext 中引用同一快照，不再次执行完整查询。
+`row_indices` 指向未筛选快照的全局行号，与本页 `data/styles` 逐行对齐；不是业务
+主键，也不授予额外访问权。客户端只能在当前颜色命中集合中选择导出投影。
 
 响应采用判别联合；TypeScript 与 Python 类型同构，不能用一个无结构的 `any`：
 
@@ -514,6 +528,9 @@ type TableColorMetadata =
       baseline_rowcount: number;
       filtered_rowcount: number;
       source_page_size: number;
+      row_offset: number;
+      row_indices: number[];
+      theme_mode: 'default' | 'dark';
       catalog: Record<string, TablePaintColor[]>;
       capabilities: Record<string, ColumnFilterCapability>;
       styles: Record<string, TableCellPaint>[];
@@ -540,7 +557,10 @@ type TableColorMetadata =
 | 410  | TABLE_COLOR_FILTER_SNAPSHOT_EXPIRED     | 不静默换基准；提示重载并保留合法选择                                |
 | 422  | TABLE_COLOR_FILTER_LIMIT_EXCEEDED       | 超资源边界；不输出截断结果、假的完整 rowcount                       |
 | 422  | TABLE_COLOR_FILTER_GRADIENT_UNSUPPORTED | 目标列受有效渐变规则影响；明确指出暂不支持，普通染色与 Apply 不受阻 |
+| 422  | TABLE_COLOR_FILTER_QUERY_FAILED         | 原查询失败，使用脱敏说明，不输出部分结果或 SQL                      |
+| 422  | TABLE_COLOR_FILTER_THEME_UNSUPPORTED    | 无法解析可信主题，要求使用受支持主题并重载                          |
 | 503  | TABLE_COLOR_FILTER_CACHE_UNAVAILABLE    | 共享存储不可用；保留普通表，不伪装颜色筛选成功                      |
+| 503  | TABLE_COLOR_FILTER_BUILD_IN_PROGRESS    | 同一上下文已有构建，避免并发重复执行慢 SQL；提示稍后重试            |
 | 504  | TABLE_COLOR_FILTER_TIMEOUT              | 停止未完成构建，不发布半成品快照                                    |
 
 服务端使用标准 Superset 错误响应包裹上述 message/code，不返回 SQL、过滤值、
@@ -607,6 +627,19 @@ Apply 更新 Explore 草稿即可生效，不要求先 Save chart。关闭/取�
 命中索引，不重新把规则编译成 HAVING，也不为了 XLSX 改算百分比或渐变。
 导出包含所有匹配行，不只是当前展示页；仍遵守既有导出权限和范围限制。
 
+既有 **Export Current View** 是显式例外：客户端分页下保留用户的本地搜索结果和
+排序，包含搜索后的全部匹配行，而不是当前可见的单页。DataTable 用原始行索引
+映射 `row_indices`，在临时 `ownState.clientView` 中只保存快照引用与行号，不把
+客户端行值或样式作为服务端可信输入。CSV/JSON/XLSX 共用 `view_rows` 投影；
+服务端验证后复用原值和原样式。投影缺失、快照不匹配或请求仍在更新时阻止导出，
+不得悄悄退回全部数据。空投影必须导出空结果。普通 Export All Data / Tab 不携带
+该投影；客户端搜索不反向改变染色分母。未启用本功能时保留原客户端导出路径。
+
+首次发布 `clientView` 与之后搜索/排序更新都不能触发 Chart Data：Explore 将
+`undefined` 与移除投影后的空对象规范成相同查询态；Dashboard 排除空的 ownState
+和没有 `extraFormData` 的纯图表交互状态，避免把它误认为 Cross Filter 广播。
+真实 Native/Cross 条件及颜色选择改变仍必须触发各自原有查询流程。
+
 若同一快照的命中行数超过该导出路径允许的保护上限，返回 422 并拒绝本次完整
 导出；不得先截基础查询到旧 exporter 的 `ROW_LIMIT` 再计算，也不得悄悄导出
 部分命中行。管理员扩大快照预算不等于自动扩大导出上限。
@@ -638,6 +671,9 @@ XLSX 使用快照的原样式；原生 Excel Data Bar 不能承诺像素级等�
 从未展示、未建立快照的 Table 才可按保存配置和清洗后的 Native/Cross 状态建立
 快照；导出说明标注数据时点。若有颜色选择但没有合法快照上下文，要求先加载该
 图表，不能猜测源分页口径。
+
+未携带颜色选择且没有快照引用的表保留既有普通导出路径；它不声称复用某个已
+展示视图的冻结样式。已选色的表绝不能通过这个兼容分支重算或扩大导出范围。
 
 汇总明确为筛后显示行的数值合计，非数值留空；不能重新对筛后原始明细聚合。
 百分比列合计使用原百分比值之和，不重算成 100%；时间比较汇总按展示列的合计
@@ -843,7 +879,7 @@ MySQL/PostgreSQL 的功能风险主要是结果类型、数值/日期归一化�
 - 已完成：回退基线核对、原生条件格式静态审查、本机 Explore 布局检查、
   ClickHouse 版本和表规模只读盘点。
 - 原型验证：真实浏览器完成下表交互；仅证明设计交互可演示。
-- 尚未完成：新功能实现、真实颜色快照、端到端数据一致性、安全/性能/多数据库验收。
+- 设计提交时尚未完成：新功能实现、真实颜色快照、端到端数据一致性、安全/性能/多数据库验收。
   不能把原型演示写成新功能已部署。
 
 | 设计验证项   | 2026-08-28 结果                                                                        |
