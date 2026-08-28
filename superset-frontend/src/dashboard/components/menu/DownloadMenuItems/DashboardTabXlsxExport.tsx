@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { MouseEvent, useMemo, useState } from 'react';
+import { MouseEvent, useEffect, useMemo, useState } from 'react';
 import { logging } from '@apache-superset/core/utils';
 import { t } from '@apache-superset/core/translation';
 import { DataMaskStateWithId, SupersetClient } from '@superset-ui/core';
@@ -55,7 +55,26 @@ const getOrderedDashboardTabs = (
 
   if (layout[DASHBOARD_ROOT_ID]) visit(DASHBOARD_ROOT_ID);
   Object.values(layout).forEach(component => visit(component.id));
+  if (options.length === 0 && layout[DASHBOARD_ROOT_ID]) {
+    options.push({
+      id: DASHBOARD_ROOT_ID,
+      label: t('Entire dashboard'),
+    });
+  }
   return options;
+};
+
+const getDefaultTabSelection = (
+  tabs: DashboardTabOption[],
+  activeTabs: string[],
+) => {
+  const availableIds = new Set(tabs.map(tab => tab.id));
+  const selectedActiveTabs = activeTabs.filter(tabId =>
+    availableIds.has(tabId),
+  );
+  return selectedActiveTabs.length > 0
+    ? selectedActiveTabs
+    : tabs.slice(0, 1).map(tab => tab.id);
 };
 
 const downloadWorkbook = async (
@@ -116,20 +135,25 @@ export const DashboardTabXlsxExport = ({
   const tabs = useMemo(() => getOrderedDashboardTabs(layout), [layout]);
   const [show, setShow] = useState(false);
   const [selectedTabIds, setSelectedTabIds] = useState<string[]>([]);
+  const [selectionInitialized, setSelectionInitialized] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const open = (event: MouseEvent<HTMLSpanElement>) => {
     event.stopPropagation();
-    const availableIds = new Set(tabs.map(tab => tab.id));
-    const selectedActiveTabs = activeTabs.filter(tabId =>
-      availableIds.has(tabId),
-    );
-    setSelectedTabIds(
-      selectedActiveTabs.length > 0
-        ? selectedActiveTabs
-        : tabs.slice(0, 1).map(tab => tab.id),
-    );
+    setSelectedTabIds(getDefaultTabSelection(tabs, activeTabs));
+    setSelectionInitialized(tabs.length > 0);
     setShow(true);
+  };
+
+  useEffect(() => {
+    if (!show || selectionInitialized || tabs.length === 0) return;
+    setSelectedTabIds(getDefaultTabSelection(tabs, activeTabs));
+    setSelectionInitialized(true);
+  }, [activeTabs, selectionInitialized, show, tabs]);
+
+  const close = () => {
+    setShow(false);
+    setSelectionInitialized(false);
   };
 
   const exportTabs = async () => {
@@ -140,7 +164,7 @@ export const DashboardTabXlsxExport = ({
     setLoading(true);
     try {
       await downloadWorkbook(dashboardId, orderedSelection, dataMask);
-      setShow(false);
+      close();
       addSuccessToast(t('Dashboard tabs exported successfully'));
     } catch (error) {
       logging.error(error);
@@ -156,7 +180,7 @@ export const DashboardTabXlsxExport = ({
       <Modal
         show={show}
         title={t('Export dashboard tabs to Excel')}
-        onHide={() => setShow(false)}
+        onHide={close}
         onHandledPrimaryAction={exportTabs}
         primaryButtonName={t('Export')}
         primaryButtonLoading={loading}

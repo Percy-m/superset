@@ -312,7 +312,7 @@ class DashboardFilterStateResolver:
 
 
 class ExportDashboardXlsxCommand(BaseCommand):
-    """Validate a saved Dashboard and atomically export selected Tab subtrees."""
+    """Validate a Dashboard and atomically export selected layout subtrees."""
 
     def __init__(
         self,
@@ -332,10 +332,20 @@ class ExportDashboardXlsxCommand(BaseCommand):
         notes: list[DashboardXlsxNote] = []
         ordered_charts: list[Slice] = []
         seen_slice_ids: set[int] = set()
+        has_tabs = any(
+            isinstance(node, dict) and node.get("type") == "TAB"
+            for node in layout.values()
+        )
 
         for tab_id in self._tab_ids:
             tab = layout.get(tab_id)
-            if not isinstance(tab, dict) or tab.get("type") != "TAB":
+            if not isinstance(tab, dict):
+                raise DashboardXlsxInvalidTabError()
+            is_tab = tab.get("type") == "TAB"
+            is_untabbed_root = (
+                tab_id == "ROOT_ID" and tab.get("type") == "ROOT" and not has_tabs
+            )
+            if not is_tab and not is_untabbed_root:
                 raise DashboardXlsxInvalidTabError()
             visited_nodes: set[str] = set()
             pending_nodes = [

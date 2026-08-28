@@ -18,6 +18,8 @@
  */
 import React from 'react';
 import {
+  act,
+  createStore,
   render,
   screen,
   userEvent,
@@ -27,6 +29,7 @@ import { Menu, MenuItem } from '@superset-ui/core/components/Menu';
 import { FeatureFlag, SupersetClient } from '@superset-ui/core';
 import { DASHBOARD_ROOT_ID } from 'src/dashboard/util/constants';
 import { TAB_TYPE, TABS_TYPE } from 'src/dashboard/util/componentTypes';
+import { DashboardTabXlsxExport } from './DashboardTabXlsxExport';
 import { useDownloadMenuItems } from '.';
 
 const mockAddSuccessToast = jest.fn();
@@ -227,4 +230,158 @@ test('styled Tab XLSX export posts selected tabs and dashboard state', async () 
   });
   expect(createObjectURL).toHaveBeenCalledWith(mockBlob);
   expect(revokeObjectURL).toHaveBeenCalledWith('blob:http://localhost/xlsx');
+});
+
+test('XLSX export selects the entire dashboard when layout has no tabs', async () => {
+  const mockBlob = new Blob(['xlsx'], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+  mockSupersetClient.post.mockResolvedValue({
+    blob: jest.fn().mockResolvedValue(mockBlob),
+    headers: new Headers(),
+  } as unknown as Response);
+  window.URL.createObjectURL = jest.fn(() => 'blob:http://localhost/xlsx');
+  window.URL.revokeObjectURL = jest.fn();
+
+  render(<DashboardTabXlsxExport dashboardId={1} />, {
+    useRedux: true,
+    initialState: {
+      dashboardLayout: {
+        past: [],
+        future: [],
+        present: {
+          [DASHBOARD_ROOT_ID]: {
+            id: DASHBOARD_ROOT_ID,
+            type: 'ROOT',
+            meta: {},
+            children: ['GRID_ID'],
+          },
+          GRID_ID: {
+            id: 'GRID_ID',
+            type: 'GRID',
+            meta: {},
+            children: ['ROW-FR01'],
+          },
+          'ROW-FR01': {
+            id: 'ROW-FR01',
+            type: 'ROW',
+            meta: {},
+            children: ['CHART-FR01'],
+          },
+          'CHART-FR01': {
+            id: 'CHART-FR01',
+            type: 'CHART',
+            meta: {
+              chartId: 1,
+              sliceName: 'FR-01 ClickHouse Drill Detail',
+            },
+            children: [],
+          },
+        },
+      },
+      dashboardState: { activeTabs: [] },
+      dataMask: {},
+    },
+  });
+
+  await userEvent.click(screen.getByText('Export tabs to Excel'));
+
+  expect(screen.getByLabelText('Entire dashboard')).toBeChecked();
+  expect(screen.getByRole('button', { name: 'Export' })).toBeEnabled();
+  await userEvent.click(screen.getByRole('button', { name: 'Export' }));
+
+  await waitFor(() => {
+    expect(mockSupersetClient.post).toHaveBeenCalledWith(
+      expect.objectContaining({
+        endpoint: '/api/v1/dashboard/1/export_xlsx/',
+        body: JSON.stringify({ tabIds: [DASHBOARD_ROOT_ID], dataMask: {} }),
+      }),
+    );
+  });
+});
+
+test('Tab XLSX export initializes nested tabs after layout hydration', async () => {
+  const emptyLayout = { past: [], future: [], present: {} };
+  const nestedLayout = {
+    [DASHBOARD_ROOT_ID]: {
+      id: DASHBOARD_ROOT_ID,
+      type: 'ROOT',
+      meta: {},
+      children: ['TABS-outer'],
+    },
+    'TABS-outer': {
+      id: 'TABS-outer',
+      type: TABS_TYPE,
+      meta: {},
+      children: ['TAB-outer', 'TAB-other'],
+    },
+    'TAB-outer': {
+      id: 'TAB-outer',
+      type: TAB_TYPE,
+      meta: { text: 'Outer' },
+      children: ['TABS-inner'],
+    },
+    'TABS-inner': {
+      id: 'TABS-inner',
+      type: TABS_TYPE,
+      meta: {},
+      children: ['TAB-inner'],
+    },
+    'TAB-inner': {
+      id: 'TAB-inner',
+      type: TAB_TYPE,
+      meta: { text: 'Inner' },
+      children: [],
+    },
+    'TAB-other': {
+      id: 'TAB-other',
+      type: TAB_TYPE,
+      meta: { text: 'Other' },
+      children: [],
+    },
+  };
+  const dashboardLayout = (
+    state = emptyLayout,
+    action: { type: string; payload?: typeof nestedLayout },
+  ) =>
+    action.type === 'test/layoutHydrated'
+      ? { ...state, present: action.payload ?? {} }
+      : state;
+  const store = createStore(
+    {
+      dashboardLayout: emptyLayout,
+      dashboardState: { activeTabs: ['TAB-inner'] },
+      dataMask: {},
+    },
+    {
+      dashboardLayout,
+      dashboardState: (state = { activeTabs: ['TAB-inner'] }) => state,
+      dataMask: (state = {}) => state,
+    },
+  );
+
+  render(<DashboardTabXlsxExport dashboardId={123} />, { store });
+  await userEvent.click(screen.getByText('Export tabs to Excel'));
+
+  expect(screen.getByRole('button', { name: 'Export' })).toBeDisabled();
+
+  act(() => {
+    store.dispatch({ type: 'test/layoutHydrated', payload: nestedLayout });
+  });
+
+  await waitFor(() => {
+    expect(screen.getByLabelText('Inner')).toBeChecked();
+    expect(screen.getByRole('button', { name: 'Export' })).toBeEnabled();
+  });
+  const orderedCheckboxes = screen.getAllByRole('checkbox');
+  expect(orderedCheckboxes).toEqual([
+    screen.getByLabelText('Outer'),
+    screen.getByLabelText('Inner'),
+    screen.getByLabelText('Other'),
+  ]);
+
+  await userEvent.click(screen.getByLabelText('Inner'));
+  expect(screen.getByRole('button', { name: 'Export' })).toBeDisabled();
+  await userEvent.click(screen.getByLabelText('Outer'));
+  expect(screen.getByRole('button', { name: 'Export' })).toBeEnabled();
 });

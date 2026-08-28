@@ -25,6 +25,7 @@ from marshmallow import ValidationError
 
 from superset.commands.dashboard.exceptions import (
     DashboardXlsxChartFailedError,
+    DashboardXlsxInvalidTabError,
     DashboardXlsxTableLimitExceededError,
 )
 from superset.commands.dashboard.export_xlsx import (
@@ -203,6 +204,67 @@ def test_dashboard_xlsx_collects_depth_first_deduplicates_and_notes_skips() -> N
         "Sheet name normalized",
         "Unsupported visualization skipped",
     }
+
+
+def test_dashboard_xlsx_exports_root_when_dashboard_has_no_tabs() -> None:
+    chart = make_chart(1, "FR-01 ClickHouse Drill Detail")
+    layout = {
+        "ROOT_ID": {
+            "id": "ROOT_ID",
+            "type": "ROOT",
+            "children": ["GRID_ID"],
+        },
+        "GRID_ID": {
+            "id": "GRID_ID",
+            "type": "GRID",
+            "children": ["ROW-FR01"],
+        },
+        "ROW-FR01": {
+            "id": "ROW-FR01",
+            "type": "ROW",
+            "children": ["CHART-FR01"],
+        },
+        "CHART-FR01": {
+            "id": "CHART-FR01",
+            "type": "CHART",
+            "children": [],
+            "meta": {
+                "chartId": 1,
+                "sliceName": "FR-01 ClickHouse Drill Detail",
+            },
+        },
+    }
+
+    work_items, notes = ExportDashboardXlsxCommand(
+        make_dashboard(layout, [chart]),
+        ["ROOT_ID"],
+    )._collect_work_items()
+
+    assert [(item.chart.id, item.sheet_name) for item in work_items] == [
+        (1, "FR-01 ClickHouse Drill Detail"),
+    ]
+    assert notes == []
+
+
+def test_dashboard_xlsx_rejects_root_selection_when_dashboard_has_tabs() -> None:
+    layout: dict[str, object] = {
+        "ROOT_ID": {
+            "id": "ROOT_ID",
+            "type": "ROOT",
+            "children": ["TAB-a"],
+        },
+        "TAB-a": {
+            "id": "TAB-a",
+            "type": "TAB",
+            "children": [],
+        },
+    }
+
+    with pytest.raises(DashboardXlsxInvalidTabError):
+        ExportDashboardXlsxCommand(
+            make_dashboard(layout, []),
+            ["ROOT_ID"],
+        )._collect_work_items()
 
 
 def test_dashboard_xlsx_rejects_more_than_ten_tables_without_truncating() -> None:

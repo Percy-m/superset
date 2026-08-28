@@ -1226,10 +1226,10 @@ class DashboardRestApi(CustomTagsOptimizationMixin, BaseSupersetModelRestApi):
     @requires_json
     @with_dashboard
     def export_xlsx(self, dashboard: Dashboard) -> Response:
-        """Export saved Table charts under selected Dashboard Tabs as XLSX.
+        """Export saved Table charts under selected Dashboard scopes as XLSX.
         ---
         post:
-          summary: Export selected Dashboard Tabs as a styled XLSX workbook
+          summary: Export Dashboard Tables as a styled XLSX workbook
           parameters:
           - in: path
             schema:
