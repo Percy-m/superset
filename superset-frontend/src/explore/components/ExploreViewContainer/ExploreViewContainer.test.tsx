@@ -24,6 +24,8 @@ import {
   getChartMetadataRegistry,
   ChartMetadata,
   VizType,
+  FeatureFlag,
+  DataMaskStateWithId,
 } from '@superset-ui/core';
 import { QUERY_MODE_REQUISITES } from 'src/explore/constants';
 import { Router, Route } from 'react-router-dom';
@@ -34,11 +36,18 @@ import {
   userEvent,
   waitFor,
   createStore,
+  act,
 } from 'spec/helpers/testing-library';
 import { Store } from '@reduxjs/toolkit';
 import reducerIndex from 'spec/helpers/reducerIndex';
 import * as exploreActions from 'src/explore/actions/exploreActions';
+import * as chartActions from 'src/components/Chart/chartAction';
+import { updateDataMask } from 'src/dataMask/actions';
 import ExploreViewContainer from '.';
+
+// The legacy download dependency loads an obsolete Node ESM shim. Browser Blob
+// is sufficient here; this suite exercises the real Redux/query lifecycle.
+jest.mock('blob', () => globalThis.Blob);
 
 jest.doMock('@superset-ui/core', () => ({
   __esModule: true,
@@ -152,6 +161,60 @@ const renderWithRouter = ({
   );
   return { ...result, history };
 };
+
+test('color clientView publication never triggers an Explore query and retains existing selections', async () => {
+  const previousFlags = window.featureFlags;
+  window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
+  const trigger = jest.spyOn(chartActions, 'triggerQuery');
+  const store = createStore({ ...reduxState, dataMask: {} }, reducerIndex);
+  const clientView = {
+    rows: [],
+    columns: [{ key: 'profit', label: 'Profit' }],
+    count: 2,
+    snapshotId: 'snapshot-1',
+    rowIndices: [4, 2],
+  };
+  try {
+    renderWithRouter({ store, search: SEARCH });
+    await waitFor(() => expect(trigger).toHaveBeenCalledWith(true, 1));
+    trigger.mockClear();
+    await act(async () => {
+      store.dispatch(updateDataMask(1, { ownState: { clientView } }));
+    });
+    expect(trigger).not.toHaveBeenCalledWith(true, 1);
+
+    const alertFilter = {
+      version: 2,
+      selections: [{ column: 'profit', colors: ['GREEN'] }],
+      snapshotId: 'snapshot-1',
+    };
+    await act(async () => {
+      store.dispatch(
+        updateDataMask(1, { ownState: { alertFilter, clientView } }),
+      );
+    });
+    expect(trigger).toHaveBeenCalledWith(true, 1);
+    trigger.mockClear();
+    await act(async () => {
+      store.dispatch(
+        updateDataMask(1, {
+          ownState: {
+            alertFilter,
+            clientView: { ...clientView, rowIndices: [], count: 0 },
+          },
+        }),
+      );
+    });
+    expect(trigger).not.toHaveBeenCalledWith(true, 1);
+    const state = store.getState() as unknown as {
+      dataMask: DataMaskStateWithId;
+    };
+    expect(state.dataMask[1].ownState?.alertFilter).toEqual(alertFilter);
+  } finally {
+    trigger.mockRestore();
+    window.featureFlags = previousFlags;
+  }
+});
 
 test('generates a new form_data param when none is available', async () => {
   getChartMetadataRegistry().registerValue(

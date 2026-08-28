@@ -16,7 +16,7 @@
 # under the License.
 from __future__ import annotations
 
-from typing import Any, cast, TYPE_CHECKING
+from typing import Any, cast
 
 from flask import current_app
 
@@ -26,12 +26,12 @@ from superset.common.query_context import QueryContext
 from superset.common.query_object import QueryObject
 from superset.common.query_object_factory import QueryObjectFactory
 from superset.common.table_alerts import (
-    ALERT_FILTER_FINGERPRINT_EXTRA_KEY,
-    ALERT_FILTERS_EXTRA_KEY,
-    ALERT_TOTALS_EXTRA_KEY,
-    INVALID_ALERT_RULE_MESSAGE,
     STYLED_XLSX_UNSUPPORTED_MESSAGE,
-    TableRuleResolver,
+)
+from superset.common.table_color_schema import (
+    TableColorFilterError,
+    TableColorFilterSchema,
+    TableColorRequest,
 )
 from superset.daos.chart import ChartDAO
 from superset.daos.datasource import DatasourceDAO
@@ -40,9 +40,6 @@ from superset.explorables.base import Explorable
 from superset.models.slice import Slice
 from superset.superset_typing import Column
 from superset.utils.core import DatasourceDict, DatasourceType, is_adhoc_column
-
-if TYPE_CHECKING:
-    from superset.connectors.sqla.models import SqlaTable
 
 
 def create_query_object_factory() -> QueryObjectFactory:
@@ -103,10 +100,8 @@ class QueryContextFactory:  # pylint: disable=too-few-public-methods
             bool(form_data.get("server_pagination")) if form_data else False
         )
 
-        resolved_queries = [
-            self._resolve_table_alerts(query, slice_, datasource_model_instance)
-            for query in queries
-        ]
+        color_request = self._get_table_color_request(queries)
+        resolved_queries = [self._normalize_color_query(query) for query in queries]
         queries_ = [
             self._process_query_object(
                 datasource_model_instance,
@@ -122,7 +117,17 @@ class QueryContextFactory:  # pylint: disable=too-few-public-methods
         ]
         cache_values = {
             "datasource": datasource,
-            "queries": resolved_queries,
+            "queries": [
+                {
+                    **query,
+                    **(
+                        {"table_color_filter": color_request}
+                        if color_request and index == 0
+                        else {}
+                    ),
+                }
+                for index, query in enumerate(resolved_queries)
+            ],
             "result_type": result_type,
             "result_format": result_format,
             "result_format_options": result_format_options,
@@ -138,43 +143,51 @@ class QueryContextFactory:  # pylint: disable=too-few-public-methods
             force=force,
             custom_cache_timeout=custom_cache_timeout,
             cache_values=cache_values,
+            table_color_filter=color_request,
         )
 
-    def _resolve_table_alerts(
-        self,
-        query: dict[str, Any],
-        slice_: Slice | None,
-        datasource: Explorable | None,
-    ) -> dict[str, Any]:
-        """Replace untrusted alert references with canonical server-owned rules."""
+    @staticmethod
+    def _normalize_color_query(query: dict[str, Any]) -> dict[str, Any]:
+        """Keep color state outside SQL and discard the retired alert engine inputs."""
         resolved_query = dict(query)
-        references = resolved_query.pop("alert_filters", None)
-        wants_totals = resolved_query.pop("is_table_alert_totals", False)
-        if not is_feature_enabled("TABLE_ALERT_FILTERS") or not references:
-            return resolved_query
-        if (
-            not isinstance(slice_, Slice)
-            or datasource is None
-            or not hasattr(datasource, "columns")
-            or not hasattr(datasource, "metrics")
-        ):
-            # TableRuleResolver intentionally returns one non-sensitive error shape.
-            raise QueryObjectValidationError(INVALID_ALERT_RULE_MESSAGE)
-
-        groups, fingerprint = TableRuleResolver(
-            slice_, cast("SqlaTable", datasource)
-        ).resolve(
-            references=references,
-            query=resolved_query,
-        )
-        canonical_query = dict(resolved_query)
+        resolved_query.pop("table_color_filter", None)
+        resolved_query.pop("alert_filters", None)
+        resolved_query.pop("is_table_alert_totals", None)
         extras = dict(resolved_query.get("extras") or {})
-        extras[ALERT_FILTERS_EXTRA_KEY] = groups
-        extras[ALERT_FILTER_FINGERPRINT_EXTRA_KEY] = fingerprint
-        if wants_totals:
-            extras[ALERT_TOTALS_EXTRA_KEY] = True
-        canonical_query["extras"] = extras
-        return canonical_query
+        for key in list(extras):
+            if key.startswith("__table_alert") or key.startswith("__table_color"):
+                extras.pop(key)
+        if "extras" in resolved_query:
+            resolved_query["extras"] = extras
+        return resolved_query
+
+    @staticmethod
+    def _get_table_color_request(
+        queries: list[dict[str, Any]],
+    ) -> TableColorRequest | None:
+        """Validate direct command callers as well as Marshmallow API callers."""
+        if not is_feature_enabled("TABLE_ALERT_FILTERS"):
+            return None
+        references = [
+            query["table_color_filter"]
+            for query in queries
+            if "table_color_filter" in query
+        ]
+        if not references:
+            return None
+        if (
+            not queries
+            or "table_color_filter" not in queries[0]
+            or any(reference != references[0] for reference in references)
+            or any(
+                "alert_filters" in query or "is_table_alert_totals" in query
+                for query in queries
+            )
+        ):
+            raise TableColorFilterError(
+                "TABLE_COLOR_FILTER_INVALID", "Conflicting color filter requests."
+            )
+        return cast(TableColorRequest, TableColorFilterSchema().load(references[0]))
 
     def _convert_to_model(self, datasource: DatasourceDict) -> Explorable:
         return DatasourceDAO.get_datasource(

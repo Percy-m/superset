@@ -15,6 +15,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
+from typing import Any
+
 import pytest
 from flask import current_app
 from marshmallow import ValidationError
@@ -24,6 +26,8 @@ from superset.charts.schemas import (
     ChartDataQueryObjectSchema,
     get_time_grain_choices,
 )
+from superset.common.query_context_factory import QueryContextFactory
+from superset.common.table_color_schema import TableColorFilterSchema
 
 
 def test_get_time_grain_choices(app_context: None) -> None:
@@ -135,49 +139,202 @@ def test_chart_data_query_object_schema_time_grain_sqla_validation(
     assert result["extras"]["time_grain_sqla"] is None
 
 
-def test_chart_data_query_object_schema_validates_table_alert_references(
+def test_chart_data_query_object_schema_validates_result_color_selections(
     app_context: None,
 ) -> None:
-    """Alert filters accept only UUID references and the three supported levels."""
+    """Chart requests carry color selections, not rule IDs or client thresholds."""
     schema = ChartDataQueryObjectSchema()
     valid = schema.load(
         {
             "metrics": ["gross_revenue"],
-            "alert_filters": [
-                {
-                    "rule_id": "772a548e-72f7-4ac8-a8ff-fdb7465b3ccd",
-                    "level": "RED",
-                }
+            "table_color_filter": {
+                "version": 2,
+                "selections": [
+                    {"column": "gross_revenue", "colors": ["RED", "GREEN"]},
+                    {"column": "gross_revenue", "colors": ["YELLOW", "RED"]},
+                ],
+            },
+        }
+    )
+    assert valid["table_color_filter"] == {
+        "version": 2,
+        "theme_mode": "default",
+        "selections": [
+            {"column": "gross_revenue", "colors": ["GREEN", "YELLOW", "RED"]}
+        ],
+    }
+    assert valid["metrics"] == ["gross_revenue"]
+
+
+def test_chart_data_query_object_schema_limits_color_selection_columns(
+    app_context: None,
+) -> None:
+    """A query accepts at most one hundred target-column selections."""
+    schema = ChartDataQueryObjectSchema()
+    selections = [
+        {"column": f"column_{index}", "colors": ["GREEN"]} for index in range(101)
+    ]
+    valid = schema.load(
+        {"table_color_filter": {"version": 2, "selections": selections[:100]}}
+    )
+    assert len(valid["table_color_filter"]["selections"]) == 100
+    with pytest.raises(ValidationError) as exc_info:
+        schema.load({"table_color_filter": {"version": 2, "selections": selections}})
+    assert "table_color_filter" in exc_info.value.messages
+
+
+def test_table_color_schema_defaults_and_normalized_column_order() -> None:
+    """Defaults create an empty snapshot selection and deterministic cache input."""
+    schema = TableColorFilterSchema()
+    assert schema.load({"version": 2}) == {
+        "version": 2,
+        "theme_mode": "default",
+        "selections": [],
+    }
+    result = schema.load(
+        {
+            "version": 2,
+            "theme_mode": "dark",
+            "snapshot_id": "snapshot",
+            "form_data_key": "owned-draft",
+            "selections": [
+                {"column": "z", "colors": ["RED", "GREEN"]},
+                {"column": "a", "colors": ["YELLOW", "YELLOW"]},
             ],
+        }
+    )
+    assert result["selections"] == [
+        {"column": "a", "colors": ["YELLOW"]},
+        {"column": "z", "colors": ["GREEN", "RED"]},
+    ]
+    assert result["snapshot_id"] == "snapshot"
+    assert result["form_data_key"] == "owned-draft"
+    assert result["theme_mode"] == "dark"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"version": 1},
+        {"version": "2"},
+        {"version": 2.0},
+        {"version": True},
+        {"version": 2, "theme_mode": "system"},
+        {"version": 2, "snapshot_id": ""},
+        {"version": 2, "snapshot_id": "s" * 257},
+        {"version": 2, "form_data_key": "d" * 257},
+        {"version": 2, "selections": None},
+        {"version": 2, "selections": "RED"},
+    ],
+)
+def test_table_color_schema_rejects_invalid_versions_and_runtime_references(
+    payload: dict[str, Any],
+) -> None:
+    """Types, supported modes and opaque-reference lengths are strictly bounded."""
+    with pytest.raises(ValidationError):
+        ChartDataQueryObjectSchema().load({"table_color_filter": payload})
+
+
+@pytest.mark.parametrize(
+    "selection",
+    [
+        {},
+        {"column": "", "colors": ["GREEN"]},
+        {"column": "c" * 1025, "colors": ["GREEN"]},
+        {"column": 12, "colors": ["GREEN"]},
+        {"column": "metric", "colors": []},
+        {"column": "metric", "colors": ["RED"] * 4},
+        {"column": "metric", "colors": ["green"]},
+        {"column": "metric", "colors": ["BLUE"]},
+        {"column": "metric", "colors": ["#ff0000"]},
+        {"column": "metric", "colors": [None]},
+    ],
+)
+def test_table_color_schema_rejects_invalid_columns_and_colors(
+    selection: dict[str, Any],
+) -> None:
+    """Only the three supported final paint categories may be selected."""
+    with pytest.raises(ValidationError):
+        TableColorFilterSchema().load({"version": 2, "selections": [selection]})
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"threshold": 42},
+        {"rule_id": "old-rule"},
+        {"sql": "SUM(value)"},
+        {"backgroundColor": "#ff0000"},
+        {"alertLevel": "RED"},
+    ],
+)
+def test_table_color_schema_rejects_client_rule_and_style_fields(
+    extra: dict[str, Any],
+) -> None:
+    """Unknown fields fail at both the request and individual-selection boundary."""
+    schema = TableColorFilterSchema()
+    with pytest.raises(ValidationError, match="Unknown field"):
+        schema.load({"version": 2, **extra})
+    with pytest.raises(ValidationError, match="Unknown field"):
+        schema.load(
+            {
+                "version": 2,
+                "selections": [{"column": "metric", "colors": ["GREEN"], **extra}],
+            }
+        )
+
+
+def test_table_color_schema_bounds_utf8_request_bytes_not_character_count() -> None:
+    """Valid individual fields can still exceed the 64-KiB complete-object bound."""
+    schema = TableColorFilterSchema()
+    ascii_payload = {
+        "version": 2,
+        "selections": [
+            {"column": f"{index}" + "x" * 500, "colors": ["GREEN"]}
+            for index in range(50)
+        ],
+    }
+    assert len(schema.load(ascii_payload)["selections"]) == 50
+    unicode_payload = {
+        "version": 2,
+        "selections": [
+            {"column": f"{index}" + "中" * 500, "colors": ["GREEN"]}
+            for index in range(50)
+        ],
+    }
+    with pytest.raises(ValidationError, match="request is too large"):
+        schema.load(unicode_payload)
+
+
+def test_table_color_schema_accepts_boundary_lengths() -> None:
+    """Maximum-length column names and references remain usable."""
+    result = TableColorFilterSchema().load(
+        {
+            "version": 2,
+            "snapshot_id": "s" * 256,
+            "form_data_key": "d" * 256,
+            "selections": [
+                {"column": "c" * 1024, "colors": ["GREEN", "YELLOW", "RED"]}
+            ],
+        }
+    )
+    assert len(result["selections"][0]["column"]) == 1024
+
+
+def test_chart_data_schema_legacy_fields_are_accepted_only_for_factory_discard() -> (
+    None
+):
+    """Old saved query contexts cannot re-enable the retired SQL filtering engine."""
+    parsed = ChartDataQueryObjectSchema().load(
+        {
+            "metrics": ["profit"],
+            "alert_filters": [{"rule_id": "not-a-uuid", "level": "PURPLE"}],
             "is_table_alert_totals": True,
         }
     )
-    assert str(valid["alert_filters"][0]["rule_id"]) == (
-        "772a548e-72f7-4ac8-a8ff-fdb7465b3ccd"
-    )
-    assert valid["is_table_alert_totals"] is True
-
-    with pytest.raises(ValidationError):
-        schema.load({"alert_filters": [{"rule_id": "not-a-uuid", "level": "PURPLE"}]})
-
-
-def test_chart_data_query_object_schema_limits_table_alert_references(
-    app_context: None,
-) -> None:
-    """A query cannot request more than fifty alert rules."""
-    schema = ChartDataQueryObjectSchema()
-    references = [
-        {
-            "rule_id": f"00000000-0000-4000-8000-{index:012d}",
-            "level": "RED",
-        }
-        for index in range(51)
-    ]
-
-    with pytest.raises(ValidationError) as exc_info:
-        schema.load({"alert_filters": references})
-
-    assert "alert_filters" in exc_info.value.messages
+    normalized = QueryContextFactory._normalize_color_query(parsed)
+    assert normalized == ChartDataQueryObjectSchema().load({"metrics": ["profit"]})
 
 
 @pytest.mark.parametrize(

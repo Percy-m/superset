@@ -34,6 +34,8 @@ import {
   LatestQueryFormData,
   QueryFormData,
   Behavior,
+  TableColorFilterState,
+  TableColorMetadata,
 } from '@superset-ui/core';
 import { css, styled, useTheme } from '@apache-superset/core/theme';
 import { t } from '@apache-superset/core/translation';
@@ -46,6 +48,7 @@ import {
 import { getChartMetadataRegistry } from '@superset-ui/core';
 import { Menu, MenuProps } from '@superset-ui/core/components/Menu';
 import { useToasts } from 'src/components/MessageToasts/withToasts';
+import { areTableColorSelectionsEqual } from 'src/components/Chart/tableColorFilterRequest';
 import { DEFAULT_CSV_STREAMING_ROW_THRESHOLD } from 'src/constants';
 import { exportChart, getChartKey } from 'src/explore/exploreUtils';
 import downloadAsImage from 'src/utils/downloadAsImage';
@@ -155,6 +158,8 @@ interface OwnStateWithClientView extends JsonObject {
   clientView?: {
     rows?: ClientViewRow[];
     columns?: ClientViewColumn[];
+    snapshotId?: string;
+    rowIndices?: number[];
   };
 }
 
@@ -318,8 +323,17 @@ export const useExploreAdditionalActionsMenu = (
     let actualRowCount;
     const isTableViz = latestQueryFormData?.viz_type === 'table';
     const queriesResponse = chart?.queriesResponse;
+    const colorMetadata = queriesResponse?.[0]?.table_color_metadata as
+      | TableColorMetadata
+      | undefined;
 
     if (
+      isTableViz &&
+      isFeatureEnabled(FeatureFlag.TableAlertFilters) &&
+      colorMetadata?.status === 'ready'
+    ) {
+      actualRowCount = colorMetadata.filtered_rowcount;
+    } else if (
       isTableViz &&
       queriesResponse &&
       queriesResponse.length > 1 &&
@@ -417,6 +431,52 @@ export const useExploreAdditionalActionsMenu = (
           })
         : null,
     [canDownloadCSV, latestQueryFormData, ownState],
+  );
+
+  const isClientColorTable =
+    latestQueryFormData?.viz_type === 'table' &&
+    !latestQueryFormData?.server_pagination &&
+    isFeatureEnabled(FeatureFlag.TableAlertFilters) &&
+    Array.isArray(latestQueryFormData?.conditional_formatting) &&
+    latestQueryFormData.conditional_formatting.some(
+      rule => rule?.filterable === true,
+    );
+
+  const exportCurrentColorView = useCallback(
+    async (resultFormat: 'csv' | 'json' | 'xlsx') => {
+      if (!canDownloadCSV) return;
+      const view = ownState?.clientView;
+      const metadata = chart?.queriesResponse?.[0]?.table_color_metadata as
+        | TableColorMetadata
+        | undefined;
+      const filter = ownState?.alertFilter as TableColorFilterState | undefined;
+      if (
+        chart?.chartStatus === 'loading' ||
+        metadata?.status !== 'ready' ||
+        !view?.snapshotId ||
+        !Array.isArray(view.rowIndices) ||
+        view.snapshotId !== metadata.snapshot_id ||
+        !areTableColorSelectionsEqual(filter?.selections, metadata.selections)
+      ) {
+        addDangerToast(t('Load the current table view before exporting.'));
+        return;
+      }
+      try {
+        await exportChart({
+          formData: latestQueryFormData as QueryFormData,
+          ownState,
+          resultType: 'results',
+          resultFormat,
+          currentView: {
+            snapshotId: view.snapshotId,
+            rowIndices: view.rowIndices,
+          },
+        });
+      } catch {
+        addDangerToast(t('Load the current table view before exporting.'));
+      }
+    },
+    [canDownloadCSV, chart, ownState, latestQueryFormData, addDangerToast],
   );
 
   const copyLink = useCallback(async () => {
@@ -776,10 +836,12 @@ export const useExploreAdditionalActionsMenu = (
         label: t('Export to .CSV'),
         icon: <Icons.FileOutlined />,
         disabled: !canDownloadCSV,
-        onClick: () => {
+        onClick: async () => {
           // Use 'results' to export the *current view* (as opposed to 'full').
           // Pass ownState so client/UI state (e.g., filters) can be respected when supported.
-          if (
+          if (isClientColorTable) {
+            await exportCurrentColorView('csv');
+          } else if (
             !latestQueryFormData?.server_pagination &&
             ownState?.clientView?.rows?.length &&
             ownState?.clientView?.columns?.length
@@ -812,8 +874,10 @@ export const useExploreAdditionalActionsMenu = (
         label: t('Export to .JSON'),
         icon: <Icons.FileOutlined />,
         disabled: !canDownloadCSV,
-        onClick: () => {
-          if (
+        onClick: async () => {
+          if (isClientColorTable) {
+            await exportCurrentColorView('json');
+          } else if (
             !latestQueryFormData?.server_pagination &&
             ownState?.clientView?.rows?.length &&
             ownState?.clientView?.columns?.length
@@ -862,7 +926,9 @@ export const useExploreAdditionalActionsMenu = (
         icon: <Icons.FileOutlined />,
         disabled: !canDownloadCSV,
         onClick: async () => {
-          if (
+          if (isClientColorTable) {
+            await exportCurrentColorView('xlsx');
+          } else if (
             !latestQueryFormData?.server_pagination &&
             ownState?.clientView?.rows?.length &&
             ownState?.clientView?.columns?.length
@@ -1028,6 +1094,8 @@ export const useExploreAdditionalActionsMenu = (
     exportCSVPivoted,
     exportExcel,
     exportJson,
+    exportCurrentColorView,
+    isClientColorTable,
     latestQueryFormData,
     onOpenInEditor,
     onOpenPropertiesModal,

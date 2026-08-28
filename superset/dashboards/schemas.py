@@ -26,7 +26,7 @@ from marshmallow import (
     Schema,
     validates_schema,
 )
-from marshmallow.validate import Length, ValidationError
+from marshmallow.validate import Length, OneOf, ValidationError
 
 from superset import security_manager
 from superset.tags.models import TagType
@@ -496,6 +496,17 @@ class DashboardScreenshotPostSchema(Schema):
     )
 
 
+class TableColorSnapshotReferenceSchema(Schema):
+    """Ephemeral references, never accepted as saved Dashboard filter state."""
+
+    class Meta:
+        unknown = RAISE
+
+    snapshot_id = fields.String(required=True, validate=Length(min=1, max=256))
+    generation = fields.String(required=True, validate=Length(min=1, max=256))
+    theme_mode = fields.String(validate=OneOf(("default", "dark")))
+
+
 class DashboardXlsxExportSchema(Schema):
     """Validate the untrusted selected Tabs and Dashboard interaction state."""
 
@@ -511,6 +522,12 @@ class DashboardXlsxExportSchema(Schema):
         keys=fields.String(validate=Length(min=1, max=512)),
         values=fields.Raw(),
         load_default=dict,
+    )
+    colorSnapshots = fields.Dict(  # noqa: N815
+        keys=fields.String(validate=Length(min=1, max=32)),
+        values=fields.Nested(TableColorSnapshotReferenceSchema),
+        load_default=dict,
+        validate=Length(max=10),
     )
 
     @validates_schema

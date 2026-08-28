@@ -48,6 +48,9 @@ import {
   getTimeFormatterForGranularity,
   BinaryQueryObjectFilterClause,
   extractTextFromHTML,
+  TableCellPaint,
+  TableColorSelection,
+  TablePaintColor,
 } from '@superset-ui/core';
 import {
   styled,
@@ -75,19 +78,13 @@ import {
   TableOutlined,
 } from '@ant-design/icons';
 import { isEmpty, debounce, isEqual } from 'lodash';
-import {
-  ColorFormatters,
-  ConditionalFormattingConfig,
-  AlertLevel,
-  getTextColorForBackground,
-  ObjectFormattingEnum,
-  ColorSchemeEnum,
-} from '@superset-ui/chart-controls';
+import { getTextColorForBackground } from '@superset-ui/chart-controls';
 import {
   DataColumnMeta,
   SearchOption,
   SortByItem,
   TableChartTransformedProps,
+  TableChartOwnState,
 } from './types';
 import DataTable, {
   DataTableProps,
@@ -101,6 +98,10 @@ import { PAGE_SIZE_OPTIONS, SERVER_PAGE_SIZE_OPTIONS } from './consts';
 import { updateTableOwnState } from './DataTable/utils/externalAPIs';
 import getScrollBarSize from './DataTable/utils/getScrollBarSize';
 import DateWithFormatter from './utils/DateWithFormatter';
+import {
+  resolveTableCellStyle,
+  resolveTableFilterCapabilities,
+} from './utils/resolveTableCellStyle';
 
 type ValueRange = [number, number];
 
@@ -129,30 +130,6 @@ function getSortTypeByDataType(dataType: GenericDataType): DefaultSortTypes {
 }
 
 /**
- * Cell background width calculation for horizontal bar chart
- */
-function cellWidth({
-  value,
-  valueRange,
-  alignPositiveNegative,
-}: {
-  value: number;
-  valueRange: ValueRange;
-  alignPositiveNegative: boolean;
-}) {
-  const [minValue, maxValue] = valueRange;
-  if (alignPositiveNegative) {
-    const perc = Math.abs(Math.round((value / maxValue) * 100));
-    return perc;
-  }
-  const posExtent = Math.abs(Math.max(maxValue, 0));
-  const negExtent = Math.abs(Math.min(minValue, 0));
-  const tot = posExtent + negExtent;
-  const perc2 = Math.round((Math.abs(value) / tot) * 100);
-  return perc2;
-}
-
-/**
  * Sanitize a column identifier for use in HTML id attributes and CSS selectors.
  * Replaces characters that are invalid in CSS selectors with safe alternatives.
  *
@@ -175,52 +152,6 @@ export function sanitizeHeaderId(columnId: string): string {
       .replace(/_+/g, '_') // Collapse consecutive underscores
       .replace(/^_+|_+$/g, '') // Trim leading/trailing underscores
   );
-}
-
-/**
- * Cell left margin (offset) calculation for horizontal bar chart elements
- * when alignPositiveNegative is not set
- */
-function cellOffset({
-  value,
-  valueRange,
-  alignPositiveNegative,
-}: {
-  value: number;
-  valueRange: ValueRange;
-  alignPositiveNegative: boolean;
-}) {
-  if (alignPositiveNegative) {
-    return 0;
-  }
-  const [minValue, maxValue] = valueRange;
-  const posExtent = Math.abs(Math.max(maxValue, 0));
-  const negExtent = Math.abs(Math.min(minValue, 0));
-  const tot = posExtent + negExtent;
-  return Math.round((Math.min(negExtent + value, negExtent) / tot) * 100);
-}
-
-/**
- * Cell background color calculation for horizontal bar chart
- */
-function cellBackground({
-  value,
-  colorPositiveNegative = false,
-  theme,
-}: {
-  value: number;
-  colorPositiveNegative: boolean;
-  theme: SupersetTheme;
-}) {
-  if (!colorPositiveNegative) {
-    return `${theme.colorFill}`;
-  }
-
-  if (value < 0) {
-    return `${theme.colorError}50`;
-  }
-
-  return `${theme.colorSuccess}50`;
 }
 
 function SortIcon<D extends object>({ column }: { column: ColumnInstance<D> }) {
@@ -247,12 +178,26 @@ const VisuallyHidden = styled.label`
   border: 0;
 `;
 
-const AlertLevelLabelContent = styled.span`
+const AlertColorLabelContent = styled.span`
   display: inline-flex;
   align-items: center;
 `;
 
-const AlertLevelSwatch = styled.span<{ swatchColor: string }>`
+const CellBar = styled.div<{ barPaint?: TableCellPaint['cellBar'] }>`
+  position: absolute;
+  height: 100%;
+  display: block;
+  top: 0;
+  width: ${({ barPaint }) => (barPaint ? `${barPaint.width}%` : undefined)};
+  left: ${({ barPaint }) => (barPaint ? `${barPaint.offset}%` : undefined)};
+  background-color: ${({ barPaint }) => barPaint?.color};
+`;
+const ComparisonArrow = styled.span<{ arrowColor: string }>`
+  color: ${({ arrowColor }) => arrowColor};
+  margin-right: ${({ theme }) => theme.sizeUnit}px;
+`;
+
+const AlertColorSwatch = styled.span<{ swatchColor: string }>`
   display: inline-block;
   width: ${({ theme }) => theme.sizeUnit * 4}px;
   height: ${({ theme }) => theme.sizeUnit * 4}px;
@@ -263,12 +208,12 @@ const AlertLevelSwatch = styled.span<{ swatchColor: string }>`
   border-radius: ${({ theme }) => theme.borderRadiusXS}px;
 `;
 
-function AlertLevelMenuLabel({
+function AlertColorMenuLabel({
   disabled,
-  level,
+  colorKey,
 }: {
   disabled: boolean;
-  level: AlertLevel;
+  colorKey: TablePaintColor;
 }) {
   const theme = useTheme();
   const labelRef = useRef<HTMLSpanElement>(null);
@@ -277,24 +222,24 @@ function AlertLevelMenuLabel({
   const presentations = {
     RED: {
       color: theme.colorError,
-      label: t('Critical alert'),
+      label: t('Red'),
     },
     YELLOW: {
       color: theme.colorWarning,
-      label: t('Warning alert'),
+      label: t('Yellow'),
     },
     GREEN: {
       color: theme.colorSuccess,
-      label: t('Normal status'),
+      label: t('Green'),
     },
   } satisfies Record<
-    AlertLevel,
+    TablePaintColor,
     {
       color: string;
       label: string;
     }
   >;
-  const { color, label } = presentations[level];
+  const { color, label } = presentations[colorKey];
 
   useEffect(() => {
     const menuItem = labelRef.current?.closest<HTMLElement>(
@@ -323,14 +268,14 @@ function AlertLevelMenuLabel({
       title={label}
       trigger={['hover', 'focus']}
     >
-      <AlertLevelLabelContent ref={labelRef}>
-        <AlertLevelSwatch
+      <AlertColorLabelContent ref={labelRef}>
+        <AlertColorSwatch
           aria-hidden
-          data-test={`alert-level-swatch-${level.toLowerCase()}`}
+          data-test={`alert-color-swatch-${colorKey.toLowerCase()}`}
           swatchColor={disabled ? theme.colorTextDisabled : color}
         />
         <VisuallyHidden as="span">{label}</VisuallyHidden>
-      </AlertLevelLabelContent>
+      </AlertColorLabelContent>
     </Tooltip>
   );
 }
@@ -426,7 +371,7 @@ export default function TableChart<D extends DataRecord = DataRecord>(
     sticky = true, // whether to use sticky header
     columnColorFormatters,
     alertFormattingRules = [],
-    alertFilters = [],
+    tableColorMetadata,
     tableOwnState = {},
     tableAlertFiltersEnabled = false,
     allowRearrangeColumns = false,
@@ -476,40 +421,128 @@ export default function TableChart<D extends DataRecord = DataRecord>(
   const [displayedTotals, setDisplayedTotals] = useState<D | undefined>(totals);
   const theme = useTheme();
 
+  const ownStateRef = useRef(tableOwnState);
+  const receivedOwnStateRef = useRef(tableOwnState);
+  if (receivedOwnStateRef.current !== tableOwnState) {
+    receivedOwnStateRef.current = tableOwnState;
+    ownStateRef.current = tableOwnState;
+  }
+  const patchOwnState = useCallback(
+    (patch: Partial<TableChartOwnState>) => {
+      const next = { ...ownStateRef.current, ...patch };
+      ownStateRef.current = next;
+      updateTableOwnState(setDataMask, next);
+    },
+    [setDataMask],
+  );
+  const [pendingColors, setPendingColors] = useState<
+    TableColorSelection[] | undefined
+  >();
+  const metadataRef = useRef(tableColorMetadata);
+  metadataRef.current = tableColorMetadata;
+  const fallbackCapabilities = useMemo(
+    () => resolveTableFilterCapabilities(alertFormattingRules, columnsMeta),
+    [alertFormattingRules, columnsMeta],
+  );
+  const previousRulesRef = useRef(alertFormattingRules);
+  const previousCapabilitiesRef = useRef(fallbackCapabilities);
+  useEffect(() => {
+    // Hiding a target can invalidate its selection without editing any rule.
+    if (
+      isEqual(previousRulesRef.current, alertFormattingRules) &&
+      isEqual(previousCapabilitiesRef.current, fallbackCapabilities)
+    )
+      return;
+    previousRulesRef.current = alertFormattingRules;
+    previousCapabilitiesRef.current = fallbackCapabilities;
+    const filter = ownStateRef.current.alertFilter;
+    if (!tableAlertFiltersEnabled || filter?.version !== 2) return;
+    const selections = filter.selections.filter(selection => {
+      const capability = fallbackCapabilities[selection.column];
+      return capability?.enabled && capability.supported;
+    });
+    if (!isEqual(selections, filter.selections)) {
+      patchOwnState({
+        currentPage: 0,
+        alertFilter: { version: 2, selections },
+      });
+    }
+  }, [
+    alertFormattingRules,
+    fallbackCapabilities,
+    patchOwnState,
+    tableAlertFiltersEnabled,
+  ]);
+  useEffect(() => {
+    setPendingColors(undefined);
+    if (
+      serverPagination &&
+      tableColorMetadata?.status === 'ready' &&
+      tableColorMetadata.row_offset !== undefined
+    ) {
+      const page = Math.floor(
+        tableColorMetadata.row_offset /
+          (ownStateRef.current.pageSize ?? pageSize),
+      );
+      if (page !== (ownStateRef.current.currentPage ?? 0))
+        patchOwnState({ currentPage: page });
+    }
+    if (
+      tableColorMetadata?.status === 'ready' &&
+      tableColorMetadata.request_error
+    ) {
+      ownStateRef.current = {
+        ...ownStateRef.current,
+        alertFilter: {
+          version: 2,
+          selections: tableColorMetadata.selections ?? [],
+          snapshotId: tableColorMetadata.snapshot_id,
+          generation: tableColorMetadata.generation,
+        },
+      };
+    }
+  }, [tableColorMetadata, pageSize, serverPagination, patchOwnState]);
+
   const renderAlertFilterDropdown = useCallback(
     (columnKey: string) => {
       if (!tableAlertFiltersEnabled) {
         return null;
       }
-      const rules = alertFormattingRules.filter(
-        (
-          rule,
-        ): rule is ConditionalFormattingConfig & {
-          ruleId: string;
-          alertLevel: AlertLevel;
-        } =>
-          rule.filterable === true &&
-          typeof rule.ruleId === 'string' &&
-          ['RED', 'YELLOW', 'GREEN'].includes(rule.alertLevel ?? '') &&
-          rule.subjectRef?.key === columnKey,
-      );
-      if (!rules.length) {
+      const localCapability = fallbackCapabilities[columnKey];
+      const serverCapability = tableColorMetadata?.capabilities[columnKey];
+      const capability =
+        localCapability?.supported === false
+          ? localCapability
+          : (serverCapability ?? localCapability);
+      if (localCapability?.enabled === false) return null;
+      if (!capability?.enabled) {
         return null;
       }
-
-      const levels: AlertLevel[] = ['RED', 'YELLOW', 'GREEN'];
-      const selectedKeys = levels.filter(level => {
-        const levelRules = rules.filter(rule => rule.alertLevel === level);
-        return (
-          levelRules.length > 0 &&
-          levelRules.every(rule =>
-            alertFilters.some(
-              selection =>
-                selection.ruleId === rule.ruleId && selection.level === level,
-            ),
-          )
-        );
-      });
+      const ready = tableColorMetadata?.status === 'ready';
+      const applied = ready
+        ? (tableColorMetadata.selections ??
+          tableOwnState.alertFilter?.selections ??
+          [])
+        : [];
+      const selectedKeys =
+        (pendingColors ?? applied).find(
+          selection => selection.column === columnKey,
+        )?.colors ?? [];
+      const colorOrder: TablePaintColor[] = ['GREEN', 'YELLOW', 'RED'];
+      const catalog = ready
+        ? (tableColorMetadata.catalog[columnKey] ?? [])
+        : [];
+      const colors = colorOrder.filter(
+        color => catalog.includes(color) || selectedKeys.includes(color),
+      );
+      const unavailableReason =
+        capability.reason?.message ??
+        (tableColorMetadata?.status === 'unavailable'
+          ? tableColorMetadata.reason.message
+          : !ready
+            ? t('Load the table before filtering by color.')
+            : undefined);
+      const supported = ready && capability.supported;
 
       return (
         <Dropdown
@@ -518,62 +551,85 @@ export default function TableChart<D extends DataRecord = DataRecord>(
             multiple: true,
             selectable: true,
             selectedKeys,
-            items: levels.map(level => {
-              const disabled = !rules.some(rule => rule.alertLevel === level);
-              return {
-                key: level,
+            items: [
+              ...(!supported
+                ? [{ key: 'reason', label: unavailableReason, disabled: true }]
+                : colors.length === 0
+                  ? [
+                      {
+                        key: 'empty',
+                        label: t('No colored values'),
+                        disabled: true,
+                      },
+                    ]
+                  : []),
+              ...colors.map(colorKey => ({
+                key: colorKey,
                 role: 'menuitemcheckbox',
-                'aria-checked': selectedKeys.includes(level),
+                'aria-checked': selectedKeys.includes(colorKey),
                 label: (
-                  <AlertLevelMenuLabel disabled={disabled} level={level} />
+                  <AlertColorMenuLabel
+                    disabled={!supported}
+                    colorKey={colorKey}
+                  />
                 ),
-                disabled,
+                disabled: !supported,
                 itemIcon: ({ isSelected }: { isSelected?: boolean }) =>
                   isSelected ? (
                     <Icons.CheckOutlined aria-hidden iconSize="s" />
                   ) : null,
-              };
-            }),
+              })),
+              {
+                key: 'clear',
+                label: t('Clear color filter'),
+                disabled: selectedKeys.length === 0,
+              },
+            ],
             onClick: ({ key, domEvent }) => {
               domEvent.stopPropagation();
-              const level = key as AlertLevel;
-              const levelRules = rules.filter(
-                rule => rule.alertLevel === level,
+              const metadata = metadataRef.current;
+              if (metadata?.status !== 'ready') return;
+              if (
+                key !== 'clear' &&
+                !colorOrder.includes(key as TablePaintColor)
+              )
+                return;
+              const previous =
+                ownStateRef.current.alertFilter?.selections ??
+                metadata.selections ??
+                [];
+              const previousColors =
+                previous.find(selection => selection.column === columnKey)
+                  ?.colors ?? [];
+              const nextColors =
+                key === 'clear'
+                  ? []
+                  : colorOrder.filter(color =>
+                      color === key
+                        ? !previousColors.includes(color)
+                        : previousColors.includes(color),
+                    );
+              const selections = previous.filter(
+                selection => selection.column !== columnKey,
               );
-              const levelRuleIds = new Set(levelRules.map(rule => rule.ruleId));
-              const allSelected = levelRules.every(rule =>
-                alertFilters.some(
-                  selection =>
-                    selection.ruleId === rule.ruleId &&
-                    selection.level === level,
-                ),
-              );
-              const remaining = alertFilters.filter(
-                selection =>
-                  !(
-                    levelRuleIds.has(selection.ruleId) &&
-                    selection.level === level
-                  ),
-              );
-              const nextAlertFilters = allSelected
-                ? remaining
-                : [
-                    ...remaining,
-                    ...levelRules.map(rule => ({
-                      ruleId: rule.ruleId,
-                      level,
-                    })),
-                  ].slice(0, 50);
-              updateTableOwnState(setDataMask, {
-                ...tableOwnState,
+              if (nextColors.length)
+                selections.push({ column: columnKey, colors: nextColors });
+              setPendingColors(selections);
+              patchOwnState({
                 currentPage: 0,
-                alertFilters: nextAlertFilters,
+                alertFilter: {
+                  version: 2,
+                  selections,
+                  snapshotId: metadata.snapshot_id,
+                  generation: metadata.generation,
+                },
               });
             },
           }}
         >
           <Button
-            aria-label={t('Filter by alert level for %s', columnKey)}
+            aria-label={t('Filter by color for %s', columnKey)}
+            aria-busy={pendingColors !== undefined}
             buttonSize="xsmall"
             buttonStyle={selectedKeys.length ? 'primary' : 'link'}
             onClick={event => event.stopPropagation()}
@@ -584,9 +640,10 @@ export default function TableChart<D extends DataRecord = DataRecord>(
       );
     },
     [
-      alertFilters,
-      alertFormattingRules,
-      setDataMask,
+      fallbackCapabilities,
+      patchOwnState,
+      pendingColors,
+      tableColorMetadata,
       tableAlertFiltersEnabled,
       tableOwnState,
     ],
@@ -1106,10 +1163,6 @@ export default function TableChart<D extends DataRecord = DataRecord>(
 
       const { truncateLongCells } = config;
 
-      const hasColumnColorFormatters =
-        Array.isArray(columnColorFormatters) &&
-        columnColorFormatters.length > 0;
-
       const hasBasicColorFormatters =
         isUsingTimeComparison &&
         Array.isArray(basicColorFormatters) &&
@@ -1151,156 +1204,62 @@ export default function TableChart<D extends DataRecord = DataRecord>(
           const [isHtml, text] = formatColumnValue(column, value, row.original);
           const html = isHtml && allowRenderHtml ? { __html: text } : undefined;
 
-          let backgroundColor;
-          let color;
-          let backgroundColorCellBar;
-          let valueRangeFlag = true;
-          let arrow = '';
           const originKey = column.key.substring(column.label.length).trim();
-          if (!hasColumnColorFormatters && hasBasicColorFormatters) {
-            backgroundColor =
-              basicColorFormatters[row.index][originKey]?.backgroundColor;
-            arrow =
-              column.label === comparisonLabels[0]
-                ? basicColorFormatters[row.index][originKey]?.mainArrow
-                : '';
-          }
-
-          if (hasColumnColorFormatters) {
-            const applyFormatter = (
-              formatter: ColorFormatters[number],
-              valueToFormat: any,
-            ) => {
-              const formatterResult =
-                formatter.getColorFromValue(valueToFormat);
-              if (!formatterResult) return;
-
-              if (
-                formatter.objectFormatting ===
-                  ObjectFormattingEnum.TEXT_COLOR ||
-                formatter.toTextColor
-              ) {
-                color = formatterResult;
-              } else if (
-                formatter.objectFormatting === ObjectFormattingEnum.CELL_BAR
-              ) {
-                if (generalShowCellBars)
-                  backgroundColorCellBar = formatterResult.slice(0, -2);
-              } else {
-                backgroundColor = formatterResult;
-                valueRangeFlag = false;
-              }
-            };
-            columnColorFormatters
-              .filter(formatter => {
-                if (formatter.columnFormatting) {
-                  return formatter.columnFormatting === column.key;
-                }
-                return formatter.column === column.key;
-              })
-              .forEach(formatter => {
-                let valueToFormat;
-                if (formatter.columnFormatting) {
-                  valueToFormat = row.original[formatter.column];
-                } else {
-                  valueToFormat = value;
-                }
-                applyFormatter(formatter, valueToFormat);
-              });
-
-            columnColorFormatters
-              .filter(
-                formatter =>
-                  formatter.columnFormatting ===
-                  ObjectFormattingEnum.ENTIRE_ROW,
+          const resolved = resolveTableCellStyle({
+            columnKey: key,
+            columnLabel: column.label,
+            value,
+            row: row.original,
+            rowIndex: row.index,
+            columnColorFormatters,
+            hasBasicColorFormatters,
+            basicColorFormatter: basicColorFormatters?.[row.index]?.[originKey],
+            hasBasicColorColumnFormatters: Boolean(
+              basicColorColumnFormatters?.length,
+            ),
+            basicColorColumnFormatter:
+              basicColorColumnFormatters?.[row.index]?.[key],
+            comparisonMainLabel: comparisonLabels[0],
+            showCellBars: generalShowCellBars,
+            valueRange: valueRange || false,
+            alignPositiveNegative,
+            colorPositiveNegative,
+            theme,
+            renderHtml: Boolean(html),
+          });
+          // The snapshot owns every style dimension; a missing dimension must
+          // not be recomputed against the smaller, filtered result set.
+          const hasFrozenPaint =
+            tableAlertFiltersEnabled && tableColorMetadata?.status === 'ready';
+          const paint = hasFrozenPaint
+            ? (tableColorMetadata.styles[row.index]?.[key] ?? { colors: [] })
+            : resolved;
+          const textColor = hasFrozenPaint
+            ? getTextColorForBackground(
+                {
+                  backgroundColor: paint.backgroundColor,
+                  color: paint.textColor,
+                },
+                row.index % 2 === 0 ? theme.colorBgLayout : theme.colorBgBase,
               )
-              .forEach(formatter =>
-                applyFormatter(formatter, row.original[formatter.column]),
-              );
-          }
-
-          if (
-            basicColorColumnFormatters &&
-            basicColorColumnFormatters?.length > 0
-          ) {
-            backgroundColor =
-              basicColorColumnFormatters[row.index][column.key]
-                ?.backgroundColor || backgroundColor;
-            arrow =
-              column.label === comparisonLabels[0]
-                ? basicColorColumnFormatters[row.index][column.key]?.mainArrow
-                : '';
-          }
-          const rowSurfaceColor =
-            row.index % 2 === 0 ? theme.colorBgLayout : theme.colorBgBase;
-          const resolvedTextColor = getTextColorForBackground(
-            { backgroundColor, color },
-            rowSurfaceColor,
-          );
+            : paint.textColor;
+          const arrow = paint.arrow?.symbol;
           const StyledCell = styled.td`
             text-align: ${sharedStyle.textAlign};
             white-space: ${value instanceof Date ? 'nowrap' : undefined};
             position: relative;
-            font-weight: ${color
+            font-weight: ${(
+              hasFrozenPaint
+                ? Boolean(paint.textColor)
+                : resolved.hasExplicitTextColor
+            )
               ? `${theme.fontWeightBold}`
               : `${theme.fontWeightNormal}`};
-            background: ${backgroundColor || undefined};
+            background: ${paint.backgroundColor || undefined};
             padding-left: ${column.isChildColumn
               ? `${theme.sizeUnit * 5}px`
               : `${theme.sizeUnit}px`};
           `;
-
-          const cellBarStyles = css`
-            position: absolute;
-            height: 100%;
-            display: block;
-            top: 0;
-            ${valueRange &&
-            typeof value === 'number' &&
-            valueRangeFlag &&
-            `
-                width: ${`${cellWidth({
-                  value: value as number,
-                  valueRange,
-                  alignPositiveNegative,
-                })}%`};
-                left: ${`${cellOffset({
-                  value: value as number,
-                  valueRange,
-                  alignPositiveNegative,
-                })}%`};
-                background-color: ${
-                  (backgroundColorCellBar && `${backgroundColorCellBar}99`) ||
-                  cellBackground({
-                    value: value as number,
-                    colorPositiveNegative,
-                    theme,
-                  })
-                };
-              `}
-          `;
-
-          let arrowStyles = css`
-            color: ${basicColorFormatters &&
-            basicColorFormatters[row.index][originKey]?.arrowColor ===
-              ColorSchemeEnum.Green
-              ? theme.colorSuccess
-              : theme.colorError};
-            margin-right: ${theme.sizeUnit}px;
-          `;
-
-          if (
-            basicColorColumnFormatters &&
-            basicColorColumnFormatters?.length > 0
-          ) {
-            arrowStyles = css`
-              color: ${basicColorColumnFormatters[row.index][column.key]
-                ?.arrowColor === ColorSchemeEnum.Green
-                ? theme.colorSuccess
-                : theme.colorError};
-              margin-right: ${theme.sizeUnit}px;
-            `;
-          }
 
           const cellProps = {
             'aria-labelledby': `header-${headerId}`,
@@ -1336,8 +1295,8 @@ export default function TableChart<D extends DataRecord = DataRecord>(
                 : '',
               isActiveFilterValue(key, value) ? ' dt-is-active-filter' : '',
             ].join(' '),
-            style: resolvedTextColor
-              ? ({ color: resolvedTextColor } as CSSProperties)
+            style: textColor
+              ? ({ color: textColor } as CSSProperties)
               : undefined,
             tabIndex: 0,
           };
@@ -1363,8 +1322,10 @@ export default function TableChart<D extends DataRecord = DataRecord>(
           // render `Cell`. This saves some time for large tables.
           return (
             <StyledCell {...cellProps}>
-              {valueRange && (
-                <div
+              {(hasFrozenPaint
+                ? paint.cellBar
+                : valueRange || paint.cellBar) && (
+                <CellBar
                   /* The following classes are added to support custom CSS styling */
                   className={cx(
                     'cell-bar',
@@ -1372,7 +1333,7 @@ export default function TableChart<D extends DataRecord = DataRecord>(
                       ? 'negative'
                       : 'positive',
                   )}
-                  css={cellBarStyles}
+                  barPaint={paint.cellBar}
                   role="presentation"
                 />
               )}
@@ -1381,12 +1342,20 @@ export default function TableChart<D extends DataRecord = DataRecord>(
                   className="dt-truncate-cell"
                   style={columnWidth ? { width: columnWidth } : undefined}
                 >
-                  {arrow && <span css={arrowStyles}>{arrow}</span>}
+                  {arrow && paint.arrow && (
+                    <ComparisonArrow arrowColor={paint.arrow.color}>
+                      {arrow}
+                    </ComparisonArrow>
+                  )}
                   {text}
                 </div>
               ) : (
                 <>
-                  {arrow && <span css={arrowStyles}>{arrow}</span>}
+                  {arrow && paint.arrow && (
+                    <ComparisonArrow arrowColor={paint.arrow.color}>
+                      {arrow}
+                    </ComparisonArrow>
+                  )}
                   {text}
                 </>
               )}
@@ -1504,6 +1473,8 @@ export default function TableChart<D extends DataRecord = DataRecord>(
       handleContextMenu,
       allowRearrangeColumns,
       renderAlertFilterDropdown,
+      tableAlertFiltersEnabled,
+      tableColorMetadata,
     ],
   );
 
@@ -1565,31 +1536,37 @@ export default function TableChart<D extends DataRecord = DataRecord>(
 
   const handleServerPaginationChange = useCallback(
     (pageNumber: number, pageSize: number) => {
-      const modifiedOwnState = {
-        ...serverPaginationData,
+      const previous = ownStateRef.current;
+      const pageSizeChanged =
+        pageSize !== (previous.pageSize ?? serverPageLength);
+      patchOwnState({
         currentPage: pageNumber,
         pageSize,
-      };
-      updateTableOwnState(setDataMask, modifiedOwnState);
+        ...(pageSizeChanged && previous.alertFilter
+          ? {
+              alertFilter: {
+                version: 2,
+                selections: previous.alertFilter.selections,
+              },
+            }
+          : {}),
+      });
     },
-    [serverPaginationData, setDataMask],
+    [patchOwnState, serverPageLength],
   );
 
   useEffect(() => {
     if (hasServerPageLengthChanged) {
-      const modifiedOwnState = {
-        ...serverPaginationData,
+      const previous = ownStateRef.current.alertFilter;
+      patchOwnState({
         currentPage: 0,
         pageSize: serverPageLength,
-      };
-      updateTableOwnState(setDataMask, modifiedOwnState);
+        ...(previous
+          ? { alertFilter: { version: 2, selections: previous.selections } }
+          : {}),
+      });
     }
-  }, [
-    hasServerPageLengthChanged,
-    serverPageLength,
-    serverPaginationData,
-    setDataMask,
-  ]);
+  }, [hasServerPageLengthChanged, serverPageLength, patchOwnState]);
 
   const handleSizeChange = useCallback(
     ({ width, height }: { width: number; height: number }) => {
@@ -1629,41 +1606,63 @@ export default function TableChart<D extends DataRecord = DataRecord>(
   const handleSortByChange = useCallback(
     (sortBy: SortByItem[]) => {
       if (!serverPagination) return;
-      const modifiedOwnState = {
-        ...serverPaginationData,
+      if (isEqual(sortBy, ownStateRef.current.sortBy ?? [])) return;
+      const previous = ownStateRef.current.alertFilter;
+      patchOwnState({
         sortBy,
-      };
-      updateTableOwnState(setDataMask, modifiedOwnState);
+        currentPage: 0,
+        ...(previous
+          ? { alertFilter: { version: 2, selections: previous.selections } }
+          : {}),
+      });
     },
-    [serverPagination, serverPaginationData, setDataMask],
+    [serverPagination, patchOwnState],
   );
 
   const handleSearch = (searchText: string) => {
-    const modifiedOwnState = {
-      ...serverPaginationData,
-      searchColumn:
-        serverPaginationData?.searchColumn || searchOptions[0]?.value,
+    const previous = ownStateRef.current.alertFilter;
+    patchOwnState({
+      searchColumn: ownStateRef.current.searchColumn || searchOptions[0]?.value,
       searchText,
       currentPage: 0, // Reset to first page when searching
-    };
-    updateTableOwnState(setDataMask, modifiedOwnState);
+      ...(previous
+        ? { alertFilter: { version: 2, selections: previous.selections } }
+        : {}),
+    });
   };
 
   const debouncedSearch = debounce(handleSearch, 800);
 
   const handleChangeSearchCol = (searchCol: string) => {
-    if (!isEqual(searchCol, serverPaginationData?.searchColumn)) {
-      const modifiedOwnState = {
-        ...serverPaginationData,
+    if (!isEqual(searchCol, ownStateRef.current.searchColumn)) {
+      const previous = ownStateRef.current.alertFilter;
+      patchOwnState({
         searchColumn: searchCol,
         searchText: '',
-      };
-      updateTableOwnState(setDataMask, modifiedOwnState);
+        currentPage: 0,
+        ...(previous
+          ? { alertFilter: { version: 2, selections: previous.selections } }
+          : {}),
+      });
     }
   };
 
-  // collect client-side filtered rows for export & push snapshot to ownState (guarded)
-  const [clientViewRows, setClientViewRows] = useState<DataRecord[]>([]);
+  // Client search/sort changes only the export projection, never the paint source.
+  const clientRowsKey =
+    tableColorMetadata?.status === 'ready' && tableColorMetadata.row_indices
+      ? `${tableColorMetadata.snapshot_id}:${tableColorMetadata.row_indices.join(',')}`
+      : undefined;
+  const [clientViewData, setClientViewData] = useState<{
+    rows: DataRecord[];
+    indices: number[];
+    sourceKey?: string;
+  }>({ rows: [], indices: [] });
+  const receiveClientViewRows = useCallback(
+    (rows: D[], indices: number[] = []) =>
+      setClientViewData({ rows, indices, sourceKey: clientRowsKey }),
+    [clientRowsKey],
+  );
+  const clientViewRows = clientViewData.rows;
 
   const exportColumns = useMemo(
     () =>
@@ -1680,7 +1679,37 @@ export default function TableChart<D extends DataRecord = DataRecord>(
     columns: typeof exportColumns;
   } | null>(null);
   useEffect(() => {
-    if (serverPagination) return; // only for client-side mode
+    if (serverPagination) return;
+    // Color exports send only immutable row references, never browser row data.
+    // The snapshot export path remains active when every target is hidden.
+    if (
+      tableAlertFiltersEnabled &&
+      alertFormattingRules.some(rule => rule.filterable === true)
+    ) {
+      const ready =
+        tableColorMetadata?.status === 'ready' ? tableColorMetadata : undefined;
+      const indices = ready?.row_indices;
+      if (
+        !ready ||
+        !indices ||
+        clientViewData.sourceKey !== clientRowsKey ||
+        clientViewData.indices.some(index => indices[index] === undefined)
+      ) {
+        if (ownStateRef.current.clientView)
+          patchOwnState({ clientView: undefined });
+        return;
+      }
+      const clientView = {
+        rows: [],
+        columns: exportColumns,
+        count: clientViewData.indices.length,
+        snapshotId: ready.snapshot_id,
+        rowIndices: clientViewData.indices.map(index => indices[index]),
+      };
+      if (!isEqual(ownStateRef.current.clientView, clientView))
+        patchOwnState({ clientView });
+      return;
+    }
     const prev = prevClientViewRef.current;
     const rowsChanged = !prev || !isEqual(prev.rows, clientViewRows);
     const columnsChanged = !prev || !isEqual(prev.columns, exportColumns);
@@ -1689,8 +1718,7 @@ export default function TableChart<D extends DataRecord = DataRecord>(
         rows: clientViewRows,
         columns: exportColumns,
       };
-      updateTableOwnState(setDataMask, {
-        ...serverPaginationData,
+      patchOwnState({
         clientView: {
           rows: clientViewRows,
           columns: exportColumns,
@@ -1702,8 +1730,12 @@ export default function TableChart<D extends DataRecord = DataRecord>(
     clientViewRows,
     exportColumns,
     serverPagination,
-    setDataMask,
-    serverPaginationData,
+    patchOwnState,
+    tableAlertFiltersEnabled,
+    alertFormattingRules,
+    tableColorMetadata,
+    clientViewData,
+    clientRowsKey,
   ]);
 
   return (
@@ -1743,7 +1775,8 @@ export default function TableChart<D extends DataRecord = DataRecord>(
         onSearchChange={debouncedSearch}
         searchOptions={searchOptions}
         onFilteredDataChange={handleFilteredDataChange}
-        onFilteredRowsChange={setClientViewRows}
+        onFilteredRowsChange={receiveClientViewRows}
+        filteredRowsKey={clientRowsKey}
       />
     </Styles>
   );

@@ -16,7 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { FeatureFlag } from '@superset-ui/core';
+import { FeatureFlag, SupersetClient } from '@superset-ui/core';
 import { buildV1ChartDataPayload, exportChart } from '.';
 
 // Mock pathUtils to control app root prefix
@@ -81,6 +81,35 @@ test('saved classic Table XLSX requests server-owned styles when enabled', async
   });
 
   expect(payload.result_format_options).toEqual({ styled: true });
+});
+
+test('building a saved query_context never persists a color snapshot or creates a draft', async () => {
+  window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
+  const queryContext = {
+    datasource: { id: 1, type: 'table' },
+    force: false,
+    result_type: 'full',
+    result_format: 'json',
+    form_data: { ...baseFormData, slice_id: 7 },
+    queries: [
+      {
+        table_color_filter: {
+          version: 2,
+          snapshot_id: 'private-snapshot',
+          form_data_key: 'private-draft',
+          selections: [],
+        },
+      },
+    ],
+  };
+  getChartBuildQueryRegistry.mockReturnValue({
+    get: jest.fn().mockReturnValue(jest.fn().mockReturnValue(queryContext)),
+  });
+  const payload = await buildV1ChartDataPayload({
+    formData: { ...baseFormData, slice_id: 7 },
+  });
+  expect(payload.queries[0].table_color_filter).toBeUndefined();
+  expect(SupersetClient.post).not.toHaveBeenCalled();
 });
 
 test.each([

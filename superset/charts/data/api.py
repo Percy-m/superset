@@ -46,6 +46,7 @@ from superset.commands.chart.exceptions import (
     ChartDataQueryFailedError,
 )
 from superset.common.chart_data import ChartDataResultFormat, ChartDataResultType
+from superset.common.table_color_schema import TableColorFilterError
 from superset.connectors.sqla.models import BaseDatasource
 from superset.constants import CACHE_DISABLED_TIMEOUT
 from superset.daos.exceptions import DatasourceNotFound
@@ -164,6 +165,10 @@ class ChartDataRestApi(ChartRestApi):
             command.validate()
         except DatasourceNotFound:
             return self.response_404()
+        except TableColorFilterError as error:
+            return self.response(
+                error.status, message=error.message, error_code=error.code
+            )
         except QueryObjectValidationError as error:
             return self.response_400(message=error.message)
         except ValidationError as error:
@@ -263,6 +268,10 @@ class ChartDataRestApi(ChartRestApi):
             command.validate()
         except DatasourceNotFound:
             return self.response_404()
+        except TableColorFilterError as error:
+            return self.response(
+                error.status, message=error.message, error_code=error.code
+            )
         except QueryObjectValidationError as error:
             return self.response_400(message=error.message)
         except ValidationError as error:
@@ -348,6 +357,10 @@ class ChartDataRestApi(ChartRestApi):
             command.validate()
         except ChartDataCacheLoadError:
             return self.response_404()
+        except TableColorFilterError as error:
+            return self.response(
+                error.status, message=error.message, error_code=error.code
+            )
         except ValidationError as error:
             return self.response_400(
                 message=_("Request is incorrect: %(error)s", error=error.messages)
@@ -367,7 +380,7 @@ class ChartDataRestApi(ChartRestApi):
         # First, look for the chart query results in the cache,
         # but only if we're not forcing a refresh.
         if not form_data.get("force"):
-            with contextlib.suppress(ChartDataCacheLoadError):
+            try:
                 result = command.run(force_cached=True)
                 if result is not None:
                     # Log is_cached if extra payload callback is provided.
@@ -375,6 +388,12 @@ class ChartDataRestApi(ChartRestApi):
                     # cached and a synchronous response is being returned immediately.
                     self._log_is_cached(result, add_extra_log_payload)
                     return self._send_chart_response(result)
+            except ChartDataCacheLoadError:
+                pass
+            except TableColorFilterError as error:
+                return self.response(
+                    error.status, message=error.message, error_code=error.code
+                )
         # Otherwise, kick off a background job to run the chart query.
         # Clients will either poll or be notified of query completion,
         # at which point they will call the /data/<cache_key> endpoint
@@ -509,6 +528,8 @@ class ChartDataRestApi(ChartRestApi):
         """Get data response and optionally log is_cached information."""
         try:
             result = command.run(force_cached=force_cached)
+        except TableColorFilterError as exc:
+            return self.response(exc.status, message=exc.message, error_code=exc.code)
         except ChartDataCacheLoadError as exc:
             return self.response_422(message=exc.message)
         except ChartDataQueryFailedError as exc:
@@ -583,6 +604,10 @@ class ChartDataRestApi(ChartRestApi):
         """Determine if streaming should be used based on actual row count threshold."""
         query_context = result["query_context"]
         result_format = query_context.result_format
+
+        # Streaming re-executes SQL and would discard a frozen color selection.
+        if query_context.table_color_filter is not None:
+            return False
 
         # Only support CSV streaming currently
         if result_format.lower() != "csv":

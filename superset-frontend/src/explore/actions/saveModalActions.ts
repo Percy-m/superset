@@ -26,7 +26,7 @@ import {
   SupersetClient,
 } from '@superset-ui/core';
 import { addSuccessToast } from 'src/components/MessageToasts/actions';
-import { isEmpty } from 'lodash';
+import { isEmpty, omit } from 'lodash';
 import { Slice } from 'src/dashboard/types';
 import { Operators } from '../constants';
 import { buildV1ChartDataPayload } from '../exploreUtils';
@@ -144,6 +144,13 @@ export const getSlicePayload = async (
     ...adhocFilters,
     dashboards,
   };
+  if (formData.viz_type === 'table' && formData.extra_form_data) {
+    formData.extra_form_data = omit(formData.extra_form_data, [
+      'alertFilter',
+      'alertFilters',
+      'clientView',
+    ]);
+  }
   let datasourceId = 0;
   let datasourceType: DatasourceType = DatasourceType.Table;
 

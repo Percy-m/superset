@@ -122,7 +122,7 @@ interface TableOwnState {
   sortColumn?: string;
   sortOrder?: 'asc' | 'desc';
   searchText?: string;
-  alertFilters?: import('../../types').TableAlertFilterSelection[];
+  alertFilter?: import('@superset-ui/core').TableColorFilterState;
 
-  clientView?: ClientViewSnapshot;
+  clientView?: import('../../types').TableChartOwnState['clientView'];
 }

@@ -47,11 +47,13 @@ import { t } from '@apache-superset/core/translation';
 import {
   ensureIsArray,
   FeatureFlag,
+  getMetricLabel,
   isAdhocColumn,
   isFeatureEnabled,
   isPhysicalColumn,
   validateInteger,
   QueryFormColumn,
+  QueryFormMetric,
   QueryMode,
   SMART_DATE_ID,
   validateMaxValue,
@@ -200,29 +202,44 @@ const percentMetricCalculationControl: ControlConfig<'SelectControl'> = {
   renderTrigger: false,
 };
 
-const processComparisonColumns = (columns: any[], suffix: string) =>
+interface FormattingColumnOption {
+  label: string;
+  value: string;
+  dataType: GenericDataType;
+}
+
+const processComparisonColumns = (
+  columns: FormattingColumnOption[],
+  suffix: string,
+  metrics: Set<string>,
+) =>
   columns.flatMap(col => {
-    if (!col.label.includes(suffix)) {
+    if (col.value.includes(suffix)) return [];
+    if (metrics.has(col.value) && col.dataType === GenericDataType.Numeric) {
       return [
         {
           label: `${t('Main')} ${col.label}`,
-          value: `${t('Main')} ${col.value}`,
+          value: `Main ${col.value}`,
+          dataType: col.dataType,
         },
         {
           label: `# ${col.label}`,
           value: `# ${col.value}`,
+          dataType: col.dataType,
         },
         {
           label: `△ ${col.label}`,
           value: `△ ${col.value}`,
+          dataType: col.dataType,
         },
         {
           label: `% ${col.label}`,
           value: `% ${col.value}`,
+          dataType: col.dataType,
         },
       ];
     }
-    return [];
+    return [col];
   });
 
 /*
@@ -847,29 +864,6 @@ const config: ControlPanelConfig = {
                   : (explore?.datasource?.columns ?? {});
                 const timeCompareValue = explore?.controls?.time_compare?.value;
                 const hasTimeComparison = !isEmpty(timeCompareValue);
-                const physicalGroupby = new Set(
-                  ensureIsArray(explore?.controls?.groupby?.value).filter(
-                    (column): column is string => typeof column === 'string',
-                  ),
-                );
-                const savedMetricNames = new Set(
-                  ensureIsArray(explore?.controls?.metrics?.value).filter(
-                    (metric): metric is string => typeof metric === 'string',
-                  ),
-                );
-                const getSubjectRef = (columnName: string) => {
-                  if (physicalGroupby.has(columnName)) {
-                    return {
-                      kind: 'physical_column' as const,
-                      key: columnName,
-                    };
-                  }
-                  if (savedMetricNames.has(columnName)) {
-                    return { kind: 'saved_metric' as const, key: columnName };
-                  }
-                  return undefined;
-                };
-
                 const extraColorChoices = hasTimeComparison
                   ? [
                       {
@@ -910,51 +904,61 @@ const config: ControlPanelConfig = {
                 }
                 const { colnames, coltypes } =
                   chart?.queriesResponse?.[0] ?? {};
-                const allColumns =
+                const metrics = new Set(
+                  ensureIsArray(
+                    explore?.controls?.metrics?.value ??
+                      explore?.form_data?.metrics,
+                  ).map(metric => getMetricLabel(metric as QueryFormMetric)),
+                );
+                const percentMetrics = new Set(
+                  ensureIsArray(
+                    explore?.controls?.percent_metrics?.value ??
+                      explore?.form_data?.percent_metrics,
+                  ).map(metric => getMetricLabel(metric as QueryFormMetric)),
+                );
+                const queryColumns: FormattingColumnOption[] =
                   Array.isArray(colnames) && Array.isArray(coltypes)
-                    ? [
-                        {
-                          value: ObjectFormattingEnum.ENTIRE_ROW,
-                          label: t('entire row'),
-                          dataType: GenericDataType.String,
-                        },
-                        ...colnames.map((colname: string, index: number) => ({
+                    ? colnames
+                        .map((colname: string, index: number) => ({
                           value: colname,
                           label: Array.isArray(verboseMap)
                             ? colname
                             : (verboseMap[colname] ?? colname),
                           dataType: coltypes[index],
-                          subjectRef: getSubjectRef(colname),
-                        })),
-                      ]
+                        }))
+                        .filter(
+                          column =>
+                            !percentMetrics.has(column.value) ||
+                            metrics.has(column.value),
+                        )
                     : [];
-                const numericColumns =
-                  Array.isArray(colnames) && Array.isArray(coltypes)
-                    ? colnames.reduce((acc, colname, index) => {
-                        if (
-                          coltypes[index] === GenericDataType.Numeric ||
-                          (!hasTimeComparison &&
-                            (coltypes[index] === GenericDataType.String ||
-                              coltypes[index] === GenericDataType.Boolean))
-                        ) {
-                          acc.push({
-                            value: colname,
-                            label: Array.isArray(verboseMap)
-                              ? colname
-                              : (verboseMap[colname] ?? colname),
-                            dataType: coltypes[index],
-                            subjectRef: getSubjectRef(colname),
-                          });
-                        }
-                        return acc;
-                      }, [])
-                    : [];
-                const columnOptions = hasTimeComparison
+                const displayedColumns = hasTimeComparison
                   ? processComparisonColumns(
-                      numericColumns || [],
+                      queryColumns,
                       ensureIsArray(timeCompareValue)[0]?.toString() || '',
+                      new Set([
+                        ...metrics,
+                        ...[...percentMetrics].map(metric => `%${metric}`),
+                      ]),
                     )
-                  : numericColumns;
+                  : queryColumns;
+                const allColumns = displayedColumns.length
+                  ? [
+                      {
+                        value: ObjectFormattingEnum.ENTIRE_ROW,
+                        label: t('entire row'),
+                        dataType: GenericDataType.String,
+                      },
+                      ...displayedColumns,
+                    ]
+                  : [];
+                const columnOptions = displayedColumns.filter(
+                  column =>
+                    column.dataType === GenericDataType.Numeric ||
+                    (!hasTimeComparison &&
+                      (column.dataType === GenericDataType.String ||
+                        column.dataType === GenericDataType.Boolean)),
+                );
 
                 return {
                   removeIrrelevantConditions: chartStatus === 'success',
@@ -962,6 +966,7 @@ const config: ControlPanelConfig = {
                   verboseMap,
                   allColumns,
                   extraColorChoices,
+                  supportsAlertFilter: true,
                 };
               },
             },

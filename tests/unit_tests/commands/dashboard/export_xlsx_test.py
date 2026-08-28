@@ -77,6 +77,7 @@ def test_dashboard_xlsx_schema_is_strict_and_rejects_duplicate_tabs() -> None:
     assert schema.load({"tabIds": ["TAB-a"], "dataMask": {}}) == {
         "tabIds": ["TAB-a"],
         "dataMask": {},
+        "colorSnapshots": {},
     }
     with pytest.raises(ValidationError):
         schema.load({"tabIds": ["TAB-a", "TAB-a"]})
@@ -84,7 +85,7 @@ def test_dashboard_xlsx_schema_is_strict_and_rejects_duplicate_tabs() -> None:
         schema.load({"tabIds": ["TAB-a"], "unexpected": True})
 
 
-def test_dashboard_state_resolver_keeps_only_scoped_filters_and_alert_refs() -> None:
+def test_dashboard_state_resolver_keeps_scoped_filters_and_versioned_colors() -> None:
     layout: dict[str, object] = {
         "CHART-1": {
             "id": "CHART-1",
@@ -118,13 +119,18 @@ def test_dashboard_state_resolver_keeps_only_scoped_filters_and_alert_refs() -> 
         },
         "2": {
             "ownState": {
+                "alertFilter": {
+                    "version": 2,
+                    "selections": [{"column": "profit", "colors": ["RED"]}],
+                    "snapshotId": "never-persist-this-token",
+                },
                 "alertFilters": [
                     {
                         "ruleId": "772a548e-72f7-4ac8-a8ff-fdb7465b3ccd",
                         "level": "RED",
                     },
                     {"ruleId": "forged", "level": "PURPLE"},
-                ]
+                ],
             }
         },
     }
@@ -142,12 +148,7 @@ def test_dashboard_state_resolver_keeps_only_scoped_filters_and_alert_refs() -> 
             {"col": "category", "op": "==", "val": "A", "isExtra": True},
         ],
     }
-    assert alert_filters == [
-        {
-            "rule_id": "772a548e-72f7-4ac8-a8ff-fdb7465b3ccd",
-            "level": "RED",
-        }
-    ]
+    assert alert_filters == [{"column": "profit", "colors": ["RED"]}]
     assert resolver.dropped_state_count == 2
 
 

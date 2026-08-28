@@ -19,14 +19,97 @@
 import { MouseEvent, useEffect, useMemo, useState } from 'react';
 import { logging } from '@apache-superset/core/utils';
 import { t } from '@apache-superset/core/translation';
-import { DataMaskStateWithId, SupersetClient } from '@superset-ui/core';
+import {
+  DataMaskStateWithId,
+  FeatureFlag,
+  isFeatureEnabled,
+  QueryData,
+  SupersetClient,
+  TableColorFilterState,
+  TableColorMetadata,
+} from '@superset-ui/core';
 import { Checkbox, Flex, Modal } from '@superset-ui/core/components';
 import contentDisposition from 'content-disposition';
 import { useSelector } from 'react-redux';
 import { useToasts } from 'src/components/MessageToasts/withToasts';
+import { areTableColorSelectionsEqual } from 'src/components/Chart/tableColorFilterRequest';
 import { DashboardLayout, RootState } from 'src/dashboard/types';
 import { DASHBOARD_ROOT_ID } from 'src/dashboard/util/constants';
-import { TAB_TYPE } from 'src/dashboard/util/componentTypes';
+import { CHART_TYPE, TAB_TYPE } from 'src/dashboard/util/componentTypes';
+
+type ColorSnapshots = Record<
+  string,
+  { snapshot_id: string; generation: string; theme_mode: 'default' | 'dark' }
+>;
+
+/** Keep permission-bound tokens ephemeral and scoped to the selected layout. */
+export const getDashboardColorExportState = (
+  layout: DashboardLayout,
+  tabIds: string[],
+  dataMask: DataMaskStateWithId,
+  charts: Record<string, { queriesResponse?: QueryData[] | null }>,
+): { dataMask: DataMaskStateWithId; colorSnapshots?: ColorSnapshots } => {
+  if (!isFeatureEnabled(FeatureFlag.TableAlertFilters)) return { dataMask };
+  const sanitized = Object.fromEntries(
+    Object.entries(dataMask).map(([id, mask]) => {
+      const filter = mask.ownState?.alertFilter as
+        | TableColorFilterState
+        | undefined;
+      if (filter?.version !== 2 && !mask.ownState?.clientView)
+        return [id, mask];
+      const ownState = { ...mask.ownState };
+      delete ownState.clientView;
+      if (filter?.version === 2)
+        ownState.alertFilter = { version: 2, selections: filter.selections };
+      return [
+        id,
+        {
+          ...mask,
+          ownState,
+        },
+      ];
+    }),
+  );
+  const snapshots: ColorSnapshots = {};
+  const visited = new Set<string>();
+  const visit = (id: string) => {
+    if (visited.has(id)) return;
+    visited.add(id);
+    const component = layout[id];
+    if (!component) return;
+    if (component.type === CHART_TYPE && component.meta?.chartId) {
+      const chartId = String(component.meta.chartId);
+      const filter = dataMask[chartId]?.ownState?.alertFilter as
+        | TableColorFilterState
+        | undefined;
+      const metadata = charts[chartId]?.queriesResponse?.[0]
+        ?.table_color_metadata as TableColorMetadata | undefined;
+      const selections = filter?.version === 2 ? filter.selections : [];
+      if (
+        metadata?.status === 'ready'
+          ? !areTableColorSelectionsEqual(selections, metadata.selections)
+          : selections.length > 0
+      ) {
+        throw new Error(
+          'Load the selected color-filtered table before exporting.',
+        );
+      }
+      if (metadata?.status === 'ready') {
+        snapshots[chartId] = {
+          snapshot_id: metadata.snapshot_id,
+          generation: metadata.generation,
+          theme_mode: metadata.theme_mode ?? 'default',
+        };
+      }
+    }
+    component.children?.forEach(visit);
+  };
+  tabIds.forEach(visit);
+  return {
+    dataMask: sanitized,
+    ...(Object.keys(snapshots).length ? { colorSnapshots: snapshots } : {}),
+  };
+};
 
 type DashboardTabOption = {
   id: string;
@@ -81,6 +164,7 @@ const downloadWorkbook = async (
   dashboardId: number,
   tabIds: string[],
   dataMask: DataMaskStateWithId,
+  colorSnapshots?: ColorSnapshots,
 ) => {
   const response = await SupersetClient.post({
     endpoint: `/api/v1/dashboard/${dashboardId}/export_xlsx/`,
@@ -89,7 +173,11 @@ const downloadWorkbook = async (
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ tabIds, dataMask }),
+    body: JSON.stringify({
+      tabIds,
+      dataMask,
+      ...(colorSnapshots ? { colorSnapshots } : {}),
+    }),
     parseMethod: 'raw',
   });
   const disposition = response.headers.get('Content-Disposition');
@@ -131,6 +219,7 @@ export const DashboardTabXlsxExport = ({
     (state: RootState) => state.dashboardState.activeTabs,
   );
   const dataMask = useSelector((state: RootState) => state.dataMask);
+  const charts = useSelector((state: RootState) => state.charts);
   const { addDangerToast, addSuccessToast } = useToasts();
   const tabs = useMemo(() => getOrderedDashboardTabs(layout), [layout]);
   const [show, setShow] = useState(false);
@@ -163,12 +252,32 @@ export const DashboardTabXlsxExport = ({
       .map(tab => tab.id);
     setLoading(true);
     try {
-      await downloadWorkbook(dashboardId, orderedSelection, dataMask);
+      const exportState = getDashboardColorExportState(
+        layout,
+        orderedSelection,
+        dataMask,
+        charts ?? {},
+      );
+      await downloadWorkbook(
+        dashboardId,
+        orderedSelection,
+        exportState.dataMask,
+        exportState.colorSnapshots,
+      );
       close();
       addSuccessToast(t('Dashboard tabs exported successfully'));
     } catch (error) {
-      logging.error(error);
-      addDangerToast(t('Sorry, something went wrong. Try again later.'));
+      // Snapshot errors must not leak response bodies or filter values into logs.
+      logging.warn('Dashboard XLSX export did not complete');
+      addDangerToast(
+        error instanceof Error &&
+          error.message ===
+            'Load the selected color-filtered table before exporting.'
+          ? t(
+              'Wait for the selected color-filtered table to finish loading before exporting.',
+            )
+          : t('Sorry, something went wrong. Try again later.'),
+      );
     } finally {
       setLoading(false);
     }

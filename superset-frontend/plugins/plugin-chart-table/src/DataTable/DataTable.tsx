@@ -91,7 +91,9 @@ export interface DataTableProps<D extends object> extends TableOptions<D> {
   onSearchColChange: (searchCol: string) => void;
   searchOptions: SearchOption[];
   onFilteredDataChange?: (rows: Row<D>[], filterValue?: string) => void;
-  onFilteredRowsChange?: (rows: D[]) => void;
+  onFilteredRowsChange?: (rows: D[], indices?: number[]) => void;
+  /** Invalidate export references when the immutable color source changes. */
+  filteredRowsKey?: string;
 }
 
 export interface RenderHTMLCellProps extends HTMLProps<HTMLTableCellElement> {
@@ -136,6 +138,7 @@ export default typedMemo(function DataTable<D extends object>({
   searchOptions,
   onFilteredDataChange,
   onFilteredRowsChange,
+  filteredRowsKey,
   ...moreUseTableOptions
 }: DataTableProps<D>): JSX.Element {
   const tableHooks: PluginHook<D>[] = [
@@ -529,17 +532,23 @@ export default typedMemo(function DataTable<D extends object>({
       return;
     }
 
-    const sig = signatureOfRows(rows);
+    const sig = filteredRowsKey
+      ? `${filteredRowsKey}:${rows.map(row => row.index).join(',')}:${signatureOfRows(rows)}`
+      : signatureOfRows(rows);
 
     if (sig !== lastSigRef.current) {
-      lastSigRef.current = sig;
       if (rafRef.current != null) {
         cancelAnimationFrame(rafRef.current);
       }
       rafRef.current = requestAnimationFrame(() => {
         if (isMountedRef.current) {
           // Only emit originals when the signature truly changed
-          onFilteredRowsChange(rows.map(r => r.original as D));
+          lastSigRef.current = sig;
+          rafRef.current = null;
+          onFilteredRowsChange(
+            rows.map(r => r.original as D),
+            rows.map(r => r.index),
+          );
         }
       });
     }
@@ -550,7 +559,7 @@ export default typedMemo(function DataTable<D extends object>({
         rafRef.current = null;
       }
     };
-  }, [rows, serverPagination, onFilteredRowsChange]);
+  }, [rows, serverPagination, onFilteredRowsChange, filteredRowsKey]);
 
   return (
     <div

@@ -16,8 +16,56 @@
  * specific language governing permissions and limitations
  * under the License.
  */
-import { DataMaskStateWithId } from '@superset-ui/core';
-import { getRelevantDataMask } from './activeAllDashboardFilters';
+import { DataMaskStateWithId, FeatureFlag } from '@superset-ui/core';
+import { nativeFilters } from 'spec/fixtures/mockNativeFilters';
+import {
+  getAllActiveFilters,
+  getRelevantDataMask,
+} from './activeAllDashboardFilters';
+
+test('color-owned state is not a cross-filter while real Cross and Native filters remain active', () => {
+  const previousFlags = window.featureFlags;
+  window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
+  try {
+    const result = getAllActiveFilters({
+      chartConfiguration: {},
+      nativeFilters: nativeFilters.filters as Parameters<
+        typeof getAllActiveFilters
+      >[0]['nativeFilters'],
+      allSliceIds: [1, 2, 18],
+      dataMask: {
+        1: {
+          id: '1',
+          ownState: {
+            clientView: { snapshotId: 'snapshot-1', rowIndices: [4] },
+            alertFilter: {
+              version: 2,
+              selections: [{ column: 'profit', colors: ['GREEN'] }],
+            },
+          },
+          extraFormData: {},
+        },
+        2: {
+          id: '2',
+          extraFormData: {
+            filters: [{ col: 'country', op: 'IN', val: ['US'] }],
+          },
+        },
+        'NATIVE_FILTER-e7Q8zKixx': {
+          id: 'NATIVE_FILTER-e7Q8zKixx',
+          extraFormData: {},
+        },
+      },
+    });
+    expect(result).not.toHaveProperty('1');
+    expect(result[2].values).toEqual({
+      filters: [{ col: 'country', op: 'IN', val: ['US'] }],
+    });
+    expect(result).toHaveProperty('NATIVE_FILTER-e7Q8zKixx');
+  } finally {
+    window.featureFlags = previousFlags;
+  }
+});
 
 const mockDataMask: DataMaskStateWithId = {
   filter1: {

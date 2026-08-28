@@ -18,6 +18,7 @@
  */
 import { connect } from 'react-redux';
 import { bindActionCreators, Dispatch, AnyAction } from 'redux';
+import { withTheme } from '@apache-superset/core/theme';
 
 import * as actions from './chartAction';
 import { logEvent } from '../../logger/actions';
@@ -37,4 +38,4 @@ function mapDispatchToProps(dispatch: Dispatch<AnyAction>) {
   };
 }
 
-export default connect(null, mapDispatchToProps)(Chart);
+export default connect(null, mapDispatchToProps)(withTheme(Chart));

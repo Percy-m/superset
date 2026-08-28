@@ -30,6 +30,7 @@ import {
 import { GenericDataType } from '@apache-superset/core/common';
 import { FeatureFlag } from '@superset-ui/core';
 import { FormattingPopoverContent } from './FormattingPopoverContent';
+import { ConditionalFormattingConfig } from './types';
 
 const mockOnChange = jest.fn();
 
@@ -313,13 +314,14 @@ test('should hide formatting fields when color scheme is Green', async () => {
   });
 });
 
-test('saves a stable UUID and trusted subject metadata for an alert rule', async () => {
+test('saves a stable UUID without independent alert metadata', async () => {
   const previousFlags = window.featureFlags;
   window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
   const onChange = jest.fn();
   try {
     render(
       <FormattingPopoverContent
+        supportsAlertFilter
         config={{
           ruleId: '772a548e-72f7-4ac8-a8ff-fdb7465b3ccd',
           column: 'gross_revenue',
@@ -328,14 +330,12 @@ test('saves a stable UUID and trusted subject metadata for an alert rule', async
           targetValue: 10,
           useGradient: false,
           filterable: true,
-          alertLevel: 'RED',
         }}
         columns={[
           {
             label: 'Gross revenue',
             value: 'gross_revenue',
             dataType: GenericDataType.Numeric,
-            subjectRef: { kind: 'saved_metric', key: 'gross_revenue' },
           },
         ]}
         onChange={onChange}
@@ -343,28 +343,30 @@ test('saves a stable UUID and trusted subject metadata for an alert rule', async
     );
 
     expect(screen.getByText('Enable alert filter')).toBeInTheDocument();
+    expect(screen.queryByText('Alert level')).not.toBeInTheDocument();
     fireEvent.click(screen.getByText('Apply'));
     await waitFor(() => expect(onChange).toHaveBeenCalled());
     expect(onChange).toHaveBeenLastCalledWith(
       expect.objectContaining({
         ruleId: '772a548e-72f7-4ac8-a8ff-fdb7465b3ccd',
-        subjectRef: { kind: 'saved_metric', key: 'gross_revenue' },
-        alertLevel: 'RED',
         filterable: true,
       }),
     );
+    expect(onChange.mock.calls.at(-1)?.[0]).not.toHaveProperty('subjectRef');
+    expect(onChange.mock.calls.at(-1)?.[0]).not.toHaveProperty('alertLevel');
   } finally {
     window.featureFlags = previousFlags;
   }
 });
 
-test('keeps Cell Bar formatting independent from alert filtering', async () => {
+test('supports Cell Bar alert filtering without a subject reference', async () => {
   const previousFlags = window.featureFlags;
   window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
   const onChange = jest.fn();
   try {
     render(
       <FormattingPopoverContent
+        supportsAlertFilter
         config={{
           column: 'gross_revenue',
           colorScheme: '#f00',
@@ -373,14 +375,12 @@ test('keeps Cell Bar formatting independent from alert filtering', async () => {
           useGradient: false,
           objectFormatting: ObjectFormattingEnum.CELL_BAR,
           filterable: true,
-          alertLevel: 'RED',
         }}
         columns={[
           {
             label: 'Gross revenue',
             value: 'gross_revenue',
             dataType: GenericDataType.Numeric,
-            subjectRef: { kind: 'saved_metric', key: 'gross_revenue' },
           },
         ]}
         onChange={onChange}
@@ -391,8 +391,7 @@ test('keeps Cell Bar formatting independent from alert filtering', async () => {
     await waitFor(() => expect(onChange).toHaveBeenCalled());
     expect(onChange).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        subjectRef: { kind: 'saved_metric', key: 'gross_revenue' },
-        filterable: false,
+        filterable: true,
       }),
     );
     expect(onChange.mock.calls.at(-1)?.[0].ruleId).toMatch(
@@ -410,6 +409,7 @@ test('does not add alert rule metadata while the feature flag is disabled', asyn
   try {
     render(
       <FormattingPopoverContent
+        supportsAlertFilter
         config={{
           column: 'gross_revenue',
           colorScheme: '#f00',
@@ -421,7 +421,6 @@ test('does not add alert rule metadata while the feature flag is disabled', asyn
             label: 'Gross revenue',
             value: 'gross_revenue',
             dataType: GenericDataType.Numeric,
-            subjectRef: { kind: 'saved_metric', key: 'gross_revenue' },
           },
         ]}
         onChange={onChange}
@@ -435,6 +434,226 @@ test('does not add alert rule metadata while the feature flag is disabled', asyn
     expect(savedRule).not.toHaveProperty('subjectRef');
     expect(savedRule).not.toHaveProperty('filterable');
     expect(screen.queryByText('Enable alert filter')).not.toBeInTheDocument();
+  } finally {
+    window.featureFlags = previousFlags;
+  }
+});
+
+async function withAlertFilters(run: () => Promise<void>) {
+  const previousFlags = window.featureFlags;
+  window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
+  try {
+    await run();
+  } finally {
+    window.featureFlags = previousFlags;
+  }
+}
+
+test.each([
+  ['raw_column', GenericDataType.Numeric, Comparator.GreaterThan, 0],
+  ['SUM(revenue)', GenericDataType.Numeric, Comparator.GreaterThan, 0],
+  ['%revenue', GenericDataType.Numeric, Comparator.GreaterThan, 0],
+  ['Main revenue', GenericDataType.Numeric, Comparator.GreaterThan, 0],
+  ['region', GenericDataType.String, Comparator.Containing, 'east'],
+  ['active', GenericDataType.Boolean, Comparator.IsTrue, ''],
+] as const)(
+  'supports a color-filter switch for result field %s',
+  async (column, dataType, operator, targetValue) => {
+    await withAlertFilters(async () => {
+      const onChange = jest.fn();
+      render(
+        <FormattingPopoverContent
+          supportsAlertFilter
+          columns={[{ label: column, value: column, dataType }]}
+          config={{
+            column,
+            operator,
+            targetValue,
+            colorScheme: 'colorSuccess',
+            useGradient: false,
+          }}
+          onChange={onChange}
+        />,
+      );
+      const checkbox = screen.getByRole('checkbox', {
+        name: 'Enable alert filter',
+      });
+      expect(checkbox).toBeEnabled();
+      fireEvent.click(checkbox);
+      fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+      await waitFor(() =>
+        expect(onChange).toHaveBeenCalledWith(
+          expect.objectContaining({ filterable: true }),
+        ),
+      );
+      expect(screen.queryByText('Alert level')).not.toBeInTheDocument();
+    });
+  },
+);
+
+test('a shared non-Table caller does not gain alert controls from the global flag', async () => {
+  await withAlertFilters(async () => {
+    render(
+      <FormattingPopoverContent
+        columns={columns}
+        allColumns={columns}
+        onChange={jest.fn()}
+      />,
+    );
+    expect(
+      screen.queryByRole('checkbox', { name: 'Enable alert filter' }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText('Alert level')).not.toBeInTheDocument();
+  });
+});
+
+test.each([undefined, true])(
+  'effective gradient %s remains applicable while filtering is explicitly unavailable',
+  async useGradient => {
+    await withAlertFilters(async () => {
+      const onChange = jest.fn();
+      render(
+        <FormattingPopoverContent
+          supportsAlertFilter
+          columns={columns}
+          allColumns={columns}
+          onChange={onChange}
+          config={{
+            column: 'column1',
+            operator: Comparator.GreaterThan,
+            targetValue: 0,
+            colorScheme: 'colorSuccess',
+            objectFormatting: ObjectFormattingEnum.BACKGROUND_COLOR,
+            useGradient,
+            filterable: true,
+          }}
+        />,
+      );
+      const checkbox = screen.getByRole('checkbox', {
+        name: 'Enable alert filter',
+      });
+      expect(screen.getByText('Enable alert filter')).toBeVisible();
+      expect(checkbox).toBeDisabled();
+      await waitFor(() => expect(checkbox).not.toBeChecked());
+      expect(
+        screen.getByText(
+          /Gradient formatting does not support color filtering/,
+        ),
+      ).toBeVisible();
+      fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+      await waitFor(() =>
+        expect(onChange).toHaveBeenCalledWith(
+          expect.objectContaining({ filterable: false, useGradient: true }),
+        ),
+      );
+    });
+  },
+);
+
+test('switching an enabled rule to gradient warns and switching back does not auto-enable', async () => {
+  await withAlertFilters(async () => {
+    render(
+      <FormattingPopoverContent
+        supportsAlertFilter
+        columns={columns}
+        allColumns={columns}
+        onChange={jest.fn()}
+        config={{
+          column: 'column1',
+          operator: Comparator.GreaterThan,
+          targetValue: 0,
+          colorScheme: 'colorSuccess',
+          useGradient: false,
+          filterable: true,
+        }}
+      />,
+    );
+    const checkbox = screen.getByRole('checkbox', {
+      name: 'Enable alert filter',
+    });
+    expect(checkbox).toBeChecked();
+    fireEvent.click(findUseGradientCheckbox());
+    await waitFor(() => expect(checkbox).not.toBeChecked());
+    expect(checkbox).toBeDisabled();
+    expect(
+      screen.getByText(/Applying this change will disable this rule/),
+    ).toBeVisible();
+    fireEvent.click(findUseGradientCheckbox());
+    expect(checkbox).toBeEnabled();
+    expect(checkbox).not.toBeChecked();
+    fireEvent.click(checkbox);
+    expect(checkbox).toBeChecked();
+  });
+});
+
+test.each([ObjectFormattingEnum.TEXT_COLOR, ObjectFormattingEnum.CELL_BAR])(
+  'hidden gradient state does not disable %s filtering',
+  async objectFormatting => {
+    await withAlertFilters(async () => {
+      const onChange = jest.fn();
+      render(
+        <FormattingPopoverContent
+          supportsAlertFilter
+          columns={columns}
+          allColumns={columns}
+          onChange={onChange}
+          config={{
+            column: 'column1',
+            columnFormatting: 'column1',
+            operator: Comparator.GreaterThan,
+            targetValue: 0,
+            colorScheme: 'colorError',
+            objectFormatting,
+            useGradient: true,
+            filterable: true,
+          }}
+        />,
+      );
+      expect(
+        screen.getByRole('checkbox', { name: 'Enable alert filter' }),
+      ).toBeEnabled();
+      expect(
+        screen.queryByText(
+          /Gradient formatting does not support color filtering/,
+        ),
+      ).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+      await waitFor(() =>
+        expect(onChange).toHaveBeenCalledWith(
+          expect.objectContaining({ filterable: true }),
+        ),
+      );
+    });
+  },
+);
+
+test('legacy alertLevel and subjectRef are removed on save even when the flag is disabled', async () => {
+  const previousFlags = window.featureFlags;
+  window.featureFlags = { [FeatureFlag.TableAlertFilters]: false };
+  const legacyConfig: ConditionalFormattingConfig & {
+    alertLevel: string;
+    subjectRef: object;
+  } = {
+    column: 'column1',
+    operator: Comparator.None,
+    colorScheme: 'colorSuccess',
+    alertLevel: 'RED',
+    subjectRef: { kind: 'saved_metric', key: 'column1' },
+  };
+  try {
+    const onChange = jest.fn();
+    render(
+      <FormattingPopoverContent
+        supportsAlertFilter
+        columns={columns}
+        config={legacyConfig}
+        onChange={onChange}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(onChange).toHaveBeenCalled());
+    expect(onChange.mock.calls.at(-1)?.[0]).not.toHaveProperty('alertLevel');
+    expect(onChange.mock.calls.at(-1)?.[0]).not.toHaveProperty('subjectRef');
   } finally {
     window.featureFlags = previousFlags;
   }

@@ -29,6 +29,7 @@ from typing import Any, BinaryIO, cast, Collection, Mapping, Sequence
 
 import pandas as pd
 import xlsxwriter
+from PIL import ImageColor
 from xlsxwriter.format import Format
 from xlsxwriter.worksheet import Worksheet
 
@@ -36,12 +37,16 @@ from superset.common.table_alerts import (
     ResolvedTableStyleRule,
     table_style_rule_matches,
 )
+from superset.common.table_color_styles import PAINT_COLORS, TableCellPaint
 from superset.utils.core import GenericDataType
 
 MAX_SHEET_UTF8_BYTES = 8 * 1024 * 1024
 MAX_CELL_UTF8_BYTES = 1024 * 1024
 XLSX_DATA_LIMIT_MESSAGE = (
     "STYLED_XLSX_DATA_LIMIT_EXCEEDED: table data exceeds the XLSX safety limit"
+)
+XLSX_STYLE_ALIGNMENT_MESSAGE = (
+    "STYLED_XLSX_STALE_STYLES: frozen table styles do not match the exported data"
 )
 
 _ILLEGAL_CONTROL_CHARACTERS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
@@ -111,6 +116,73 @@ def _blend_with_white(color: str, opacity: float) -> str:
     channels = [int(color[index : index + 2], 16) for index in (1, 3, 5)]
     blended = [round(channel * opacity + 255 * (1 - opacity)) for channel in channels]
     return "#" + "".join(f"{channel:02X}" for channel in blended)
+
+
+def _frozen_color(value: str | None) -> str | None:
+    """Use a saved final CSS paint without recalculating conditional gradients."""
+    if value is None:
+        return None
+    opacity = 1.0
+    color = _normalize_color(value)
+    if color is None:
+        try:
+            red, green, blue, alpha = ImageColor.getcolor(value, "RGBA")
+        except (TypeError, ValueError):
+            return None
+        color = f"#{red:02X}{green:02X}{blue:02X}"
+        opacity = alpha / 255
+    elif re.fullmatch(r"#[0-9a-fA-F]{8}", value):
+        opacity = int(value[-2:], 16) / 255
+    elif match := re.fullmatch(r"rgba\([^,]+,[^,]+,[^,]+,\s*([0-9.]+)\s*\)", value):
+        opacity = float(match.group(1))
+    if opacity <= 0:
+        return None
+    return _blend_with_white(color, min(opacity, 1.0))
+
+
+def _frozen_table_styles(  # noqa: C901
+    dataframe: pd.DataFrame, columns: Sequence[str]
+) -> list[dict[str, TableCellPaint]] | None:
+    """Validate internal snapshot row/key alignment before using DataFrame attrs.
+
+    This attribute is assigned by the trusted snapshot exporter, not loaded from
+    an XLSX request body. Validation also catches accidental stale attrs after a
+    caller changes the frame's row selection or column names.
+    """
+    raw = dataframe.attrs.get("table_color_styles")
+    if raw is None:
+        return None
+    if not isinstance(raw, list) or len(raw) != len(dataframe):
+        raise StyledExcelError(XLSX_STYLE_ALIGNMENT_MESSAGE)
+    for row in raw:
+        if not isinstance(row, dict) or set(row) != set(columns):
+            raise StyledExcelError(XLSX_STYLE_ALIGNMENT_MESSAGE)
+        for paint in row.values():
+            if not isinstance(paint, dict):
+                raise StyledExcelError(XLSX_STYLE_ALIGNMENT_MESSAGE)
+            colors = paint.get("colors")
+            if not isinstance(colors, list) or any(
+                color not in PAINT_COLORS for color in colors
+            ):
+                raise StyledExcelError(XLSX_STYLE_ALIGNMENT_MESSAGE)
+            for key in ("backgroundColor", "textColor"):
+                if key in paint and not isinstance(paint[key], str):
+                    raise StyledExcelError(XLSX_STYLE_ALIGNMENT_MESSAGE)
+            if "cellBar" in paint:
+                bar = paint["cellBar"]
+                if not isinstance(bar, dict) or not isinstance(bar.get("color"), str):
+                    raise StyledExcelError(XLSX_STYLE_ALIGNMENT_MESSAGE)
+                for key in ("width", "offset", "min", "max"):
+                    value = bar.get(key)
+                    if (
+                        isinstance(value, bool)
+                        or not isinstance(value, numbers.Real)
+                        or not math.isfinite(value)
+                    ):
+                        raise StyledExcelError(XLSX_STYLE_ALIGNMENT_MESSAGE)
+                if bar["width"] <= 0 or bar["max"] < bar["min"]:
+                    raise StyledExcelError(XLSX_STYLE_ALIGNMENT_MESSAGE)
+    return cast(list[dict[str, TableCellPaint]], raw)
 
 
 def _readable_text_color(background: str) -> str:
@@ -340,6 +412,7 @@ class StyledWorkbookWriter:
         """Write a DataFrame and optional totals row without retaining other sheets."""
         validate_dataframe_size(df)
         columns = [str(column) for column in df.columns]
+        frozen_styles = _frozen_table_styles(df, columns)
         worksheet = self._workbook.add_worksheet(sheet_name)
         header_format = self._format(background="#E8E8E8", bold=True)
         for column_index, column_name in enumerate(columns):
@@ -366,7 +439,7 @@ class StyledWorkbookWriter:
                     number_formats[column] = excel_format
 
         data_bar_rules: dict[str, ResolvedTableStyleRule] = {}
-        for rule in rules:
+        for rule in rules if frozen_styles is None else ():
             if rule.dimension == "data_bar" and rule.target_column:
                 data_bar_rules[rule.target_column] = rule
 
@@ -375,7 +448,7 @@ class StyledWorkbookWriter:
         ):
             row = dict(zip(columns, row_values, strict=True))
             styles: dict[str, dict[str, str]] = {column: {} for column in columns}
-            for rule in rules:
+            for rule in rules if frozen_styles is None else ():
                 source_value = row.get(rule.source_column)
                 if rule.dimension == "data_bar" or not table_style_rule_matches(
                     rule, source_value
@@ -400,6 +473,30 @@ class StyledWorkbookWriter:
                 style = styles[column_name]
                 background = style.get("background")
                 font = style.get("font")
+                if frozen_styles is not None:
+                    frozen = frozen_styles[row_index - 1][column_name]
+                    background = _frozen_color(frozen.get("backgroundColor"))
+                    font = _frozen_color(frozen.get("textColor"))
+                    if bar := frozen.get("cellBar"):
+                        bar_color = _normalize_color(bar["color"])
+                        if bar_color:
+                            worksheet.conditional_format(
+                                row_index,
+                                column_index,
+                                row_index,
+                                column_index,
+                                {
+                                    "type": "data_bar",
+                                    "bar_color": bar_color,
+                                    "bar_solid": True,
+                                    "bar_negative_color_same": True,
+                                    "bar_negative_border_color_same": True,
+                                    "min_type": "num",
+                                    "min_value": bar["min"],
+                                    "max_type": "num",
+                                    "max_value": bar["max"],
+                                },
+                            )
                 if background and not font:
                     font = _readable_text_color(background)
                 cell_format = self._format(

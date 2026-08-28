@@ -20,6 +20,8 @@ import { render, screen } from 'spec/helpers/testing-library';
 import '@testing-library/jest-dom';
 import { PLACEHOLDER_DATASOURCE } from 'src/dashboard/constants';
 import { ResourceStatus } from 'src/hooks/apiResources/apiResources';
+import { FeatureFlag } from '@superset-ui/core';
+import { supersetTheme } from '@apache-superset/core/theme';
 import Chart from './Chart';
 import type { Actions } from './Chart';
 
@@ -85,4 +87,101 @@ test('shows loading spinner for client-side errors without errors array when dat
 
   expect(screen.getByRole('status')).toBeInTheDocument();
   expect(screen.queryByText(/Some client-side error/)).not.toBeInTheDocument();
+});
+
+test('Apply prepares a fresh Table color baseline without requiring a Slice save', () => {
+  const previousFlags = window.featureFlags;
+  window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
+  const renderChart = jest
+    .spyOn(Chart.prototype, 'renderChartContainer')
+    .mockReturnValue(<div>table</div>);
+  (mockActions.postChartFormData as jest.Mock).mockClear();
+  try {
+    const props = {
+      ...baseProps,
+      theme: supersetTheme,
+      queriesResponse: [],
+      chartStatus: 'rendered' as const,
+    };
+    const { rerender } = render(<Chart {...props} />);
+    const formData = {
+      ...baseProps.formData,
+      conditional_formatting: [
+        { column: 'profit', filterable: true, useGradient: false },
+      ],
+    };
+    rerender(<Chart {...props} formData={formData} />);
+    expect(mockActions.postChartFormData).toHaveBeenCalledTimes(1);
+    expect(mockActions.postChartFormData).toHaveBeenLastCalledWith(
+      formData,
+      false,
+      undefined,
+      1,
+      undefined,
+      undefined,
+      'default',
+    );
+    rerender(<Chart {...props} formData={formData} width={900} />);
+    expect(mockActions.postChartFormData).toHaveBeenCalledTimes(1);
+  } finally {
+    renderChart.mockRestore();
+    window.featureFlags = previousFlags;
+  }
+});
+
+test('ordinary formatter Apply does not introduce a query while the flag is off', () => {
+  const previousFlags = window.featureFlags;
+  window.featureFlags = {};
+  const renderChart = jest
+    .spyOn(Chart.prototype, 'renderChartContainer')
+    .mockReturnValue(<div>table</div>);
+  (mockActions.postChartFormData as jest.Mock).mockClear();
+  try {
+    const props = {
+      ...baseProps,
+      queriesResponse: [],
+      chartStatus: 'rendered' as const,
+    };
+    const { rerender } = render(<Chart {...props} />);
+    rerender(
+      <Chart
+        {...props}
+        formData={{
+          ...baseProps.formData,
+          conditional_formatting: [{ column: 'profit', filterable: true }],
+        }}
+      />,
+    );
+    expect(mockActions.postChartFormData).not.toHaveBeenCalled();
+  } finally {
+    renderChart.mockRestore();
+    window.featureFlags = previousFlags;
+  }
+});
+
+test('pending color requests keep the table mounted and do not consume its layout height', () => {
+  const previousFlags = window.featureFlags;
+  window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
+  const renderChart = jest
+    .spyOn(Chart.prototype, 'renderChartContainer')
+    .mockReturnValue(<div data-test="retained-table" />);
+  try {
+    render(
+      <Chart
+        {...baseProps}
+        chartStatus="loading"
+        queriesResponse={[
+          { data: [{ profit: 1 }], table_color_metadata: { status: 'ready' } },
+        ]}
+      />,
+    );
+    expect(screen.getByTestId('retained-table')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Updating color filter',
+    );
+    expect(screen.getByRole('status')).toHaveStyle({ position: 'absolute' });
+  } finally {
+    renderChart.mockRestore();
+    window.featureFlags = previousFlags;
+  }
 });

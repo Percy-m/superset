@@ -27,16 +27,17 @@ import {
   QueryFormData,
   SetDataMaskHook,
   ContextMenuFilters,
+  TableColorFilterState,
+  TableColorMetadata,
 } from '@superset-ui/core';
 import type {
-  AlertLevel,
   BasicColorFormatterType,
   ColorFormatters,
   DataColumnMeta,
   ServerPaginationData,
   TableColumnConfig,
+  ConditionalFormattingConfig,
 } from '@superset-ui/chart-controls';
-import type { ConditionalFormattingConfig } from '@superset-ui/chart-controls';
 
 type SerializedConditionalFormattingConfig = Omit<
   ConditionalFormattingConfig,
@@ -61,18 +62,20 @@ export interface TableChartData {
   columns: string[];
 }
 
-export interface TableAlertFilterSelection {
-  ruleId: string;
-  level: AlertLevel;
-}
-
 export interface TableChartOwnState {
   currentPage?: number;
   pageSize?: number;
-  sortBy?: { key: string; desc: boolean }[];
+  sortBy?: ServerPaginationData['sortBy'];
   searchText?: string;
   searchColumn?: string;
-  alertFilters?: TableAlertFilterSelection[];
+  alertFilter?: TableColorFilterState;
+  clientView?: {
+    rows: DataRecord[];
+    columns: { key: string; label: string }[];
+    count: number;
+    snapshotId?: string;
+    rowIndices?: number[];
+  };
 }
 
 export type TableChartFormData = QueryFormData & {
@@ -136,7 +139,7 @@ export interface TableChartTransformedProps<D extends DataRecord = DataRecord> {
   onChangeFilter?: ChartProps['hooks']['onAddFilter'];
   columnColorFormatters?: ColorFormatters;
   alertFormattingRules?: SerializedConditionalFormattingConfig[];
-  alertFilters?: TableAlertFilterSelection[];
+  tableColorMetadata?: TableColorMetadata;
   tableOwnState?: TableChartOwnState;
   tableAlertFiltersEnabled?: boolean;
   allowRearrangeColumns?: boolean;

@@ -484,8 +484,6 @@ export const MultipleValueComparators = [
 
 export type ConditionalFormattingConfig = {
   ruleId?: string;
-  subjectRef?: AlertSubjectRef;
-  alertLevel?: AlertLevel;
   filterable?: boolean;
   operator?: Comparator;
   targetValue?: number | string;
@@ -500,14 +498,10 @@ export type ConditionalFormattingConfig = {
   objectFormatting?: ObjectFormattingEnum;
 };
 
-export type AlertLevel = 'RED' | 'YELLOW' | 'GREEN';
-
-export type AlertSubjectRef =
-  | { kind: 'physical_column'; key: string }
-  | { kind: 'saved_metric'; key: string };
-
 export type ColorFormatters = {
   column: string;
+  ruleId?: string;
+  colorScheme?: string;
   toAllRow?: boolean;
   toTextColor?: boolean;
   columnFormatting?: string;

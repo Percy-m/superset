@@ -909,6 +909,27 @@ test('getColorFormatters resolves colorScheme from theme when it starts with "co
   expect(colorFormatters[0].getColorFromValue(75)).toContain('#AABBCC');
 });
 
+test('keeps the original rule identity and palette alongside the unchanged formatter', () => {
+  const [formatter] = getColorFormatters(
+    [
+      {
+        ruleId: '772a548e-72f7-4ac8-a8ff-fdb7465b3ccd',
+        column: 'count',
+        operator: Comparator.GreaterThan,
+        targetValue: 50,
+        colorScheme: 'colorError',
+        useGradient: false,
+      },
+    ],
+    mockData,
+    { colorError: '#e04355' },
+  );
+  expect(formatter.ruleId).toBe('772a548e-72f7-4ac8-a8ff-fdb7465b3ccd');
+  expect(formatter.colorScheme).toBe('colorError');
+  expect(formatter.getColorFromValue(50)).toBeUndefined();
+  expect(formatter.getColorFromValue(100)).toBe('#e04355');
+});
+
 test('correct column boolean config', () => {
   const columnConfigBoolean = [
     {

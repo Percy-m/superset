@@ -30,8 +30,13 @@ import {
   type FilterState,
   type JsonObject,
   type AgGridChartState,
+  type TableColorMetadata,
 } from '@superset-ui/core';
-import { styled } from '@apache-superset/core/theme';
+import {
+  styled,
+  isThemeDark,
+  SupersetTheme,
+} from '@apache-superset/core/theme';
 import type { ChartState, Datasource, ChartStatus } from 'src/explore/types';
 import { PLACEHOLDER_DATASOURCE } from 'src/dashboard/constants';
 import { EmptyState, Loading } from '@superset-ui/core/components';
@@ -43,6 +48,7 @@ import { isCurrentUserBot } from 'src/utils/isBot';
 import { ChartSource } from 'src/types/ChartSource';
 import { ResourceStatus } from 'src/hooks/apiResources/apiResources';
 import { Dispatch } from 'redux';
+import { isEqual } from 'lodash';
 import ChartRenderer from './ChartRenderer';
 import { ChartErrorMessage } from './ChartErrorMessage';
 import { getChartRequiredFieldsMissingMessage } from '../../utils/getChartRequiredFieldsMissingMessage';
@@ -92,6 +98,7 @@ export interface ChartProps {
   /** Whether to suppress the loading spinner (during auto-refresh) */
   suppressLoadingSpinner?: boolean;
   filterState?: FilterState;
+  theme?: SupersetTheme;
 }
 
 export type Actions = {
@@ -119,6 +126,7 @@ export type Actions = {
     chartId: number,
     dashboardId: number | undefined,
     ownState: JsonObject | undefined,
+    tableColorThemeMode?: 'default' | 'dark',
   ): Dispatch;
 };
 const BLANK = {};
@@ -203,8 +211,33 @@ class Chart extends PureComponent<ChartProps, {}> {
     }
   }
 
-  componentDidUpdate() {
+  componentDidUpdate(previous: ChartProps) {
     if (this.props.triggerQuery) {
+      this.runQuery();
+    } else if (
+      this.props.vizType === 'table' &&
+      isFeatureEnabled(FeatureFlag.TableAlertFilters) &&
+      [previous.formData, this.props.formData].some(formData =>
+        ensureIsArray(formData.conditional_formatting).some(
+          rule => rule?.filterable === true,
+        ),
+      ) &&
+      ([
+        'conditional_formatting',
+        'column_config',
+        'show_cell_bars',
+        'align_pn',
+        'color_pn',
+        'allow_render_html',
+        'comparison_color_enabled',
+        'comparison_color_scheme',
+      ].some(
+        field => !isEqual(previous.formData[field], this.props.formData[field]),
+      ) ||
+        !isEqual(previous.theme, this.props.theme))
+    ) {
+      // Formatting normally only re-renders. An enabled color filter also
+      // needs an owned, freshly prepared baseline after Apply.
       this.runQuery();
     }
   }
@@ -232,6 +265,14 @@ class Chart extends PureComponent<ChartProps, {}> {
       this.props.chartId,
       this.props.dashboardId,
       this.props.ownState,
+      ...(this.props.vizType === 'table' &&
+      isFeatureEnabled(FeatureFlag.TableAlertFilters)
+        ? [
+            this.props.theme && isThemeDark(this.props.theme)
+              ? ('dark' as const)
+              : ('default' as const),
+          ]
+        : []),
     );
   }
 
@@ -364,6 +405,17 @@ class Chart extends PureComponent<ChartProps, {}> {
     const databaseName = datasource?.database?.name as string | undefined;
 
     const isLoading = chartStatus === 'loading';
+    const colorMetadata = queriesResponse?.[0]?.table_color_metadata as
+      | TableColorMetadata
+      | undefined;
+    const keepColorView =
+      this.props.vizType === 'table' &&
+      isFeatureEnabled(FeatureFlag.TableAlertFilters) &&
+      (colorMetadata?.status === 'ready' ||
+        (Boolean(queriesResponse?.length) &&
+          ensureIsArray(this.props.formData.conditional_formatting).some(
+            rule => rule?.filterable === true,
+          )));
     // Suppress spinner during auto-refresh to avoid visual flicker
     const showSpinner = isLoading && !this.props.suppressLoadingSpinner;
 
@@ -426,7 +478,21 @@ class Chart extends PureComponent<ChartProps, {}> {
           height={height}
           width={width}
         >
-          {showSpinner
+          {isLoading && keepColorView && (
+            <div
+              role="status"
+              style={{
+                position: 'absolute',
+                top: 0,
+                right: 0,
+                zIndex: 1,
+                pointerEvents: 'none',
+              }}
+            >
+              {t('Updating color filter…')}
+            </div>
+          )}
+          {showSpinner && !keepColorView
             ? this.renderSpinner(databaseName)
             : this.renderChartContainer()}
         </Styles>

@@ -1,0 +1,287 @@
+{
+  "_license": "Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements. See the NOTICE file distributed with this work for additional information regarding copyright ownership. The ASF licenses this file to you under the Apache License, Version 2.0 (the License); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0 Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an AS IS BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific language governing permissions and limitations under the License.",
+  "default_theme": {"colorSuccess": "#52c41a", "colorWarning": "#faad14", "colorError": "#ff4d4f", "colorFill": "rgba(0, 0, 0, 0.15)"},
+  "cases": [
+    {
+      "name": "green_is_the_configured_color_not_a_positive_business_status",
+      "records": [{"profit": -5}, {"profit": 5}],
+      "columns": ["profit"],
+      "coltypes": [0],
+      "form_data": {
+        "query_mode": "aggregate",
+        "metrics": [{"label": "profit", "expressionType": "SQL", "sqlExpression": "sum(profit)"}],
+        "show_cell_bars": false,
+        "conditional_formatting": [{"column": "profit", "operator": "<", "targetValue": 0, "colorScheme": "colorSuccess", "useGradient": false, "filterable": true}]
+      },
+      "expected": {
+        "styles": [{"profit": {"backgroundColor": "#52c41a", "colors": ["GREEN"]}}, {"profit": {"colors": []}}],
+        "catalog": {"profit": ["GREEN"]},
+        "capabilities": {"profit": {"enabled": true, "supported": true}}
+      }
+    },
+    {
+      "name": "all_final_same_color_rows_count_even_if_only_one_rule_enables_entry",
+      "records": [{"profit": -5}, {"profit": 5}, {"profit": 0}],
+      "columns": ["profit"],
+      "coltypes": [0],
+      "form_data": {
+        "query_mode": "raw",
+        "show_cell_bars": false,
+        "conditional_formatting": [
+          {"column": "profit", "operator": "<", "targetValue": 0, "colorScheme": "colorSuccess", "useGradient": false, "filterable": true},
+          {"column": "profit", "operator": ">", "targetValue": 0, "colorScheme": "colorSuccess", "useGradient": false, "filterable": false}
+        ]
+      },
+      "expected": {
+        "styles": [{"profit": {"backgroundColor": "#52c41a", "colors": ["GREEN"]}}, {"profit": {"backgroundColor": "#52c41a", "colors": ["GREEN"]}}, {"profit": {"colors": []}}],
+        "catalog": {"profit": ["GREEN"]},
+        "capabilities": {"profit": {"enabled": true, "supported": true}}
+      }
+    },
+    {
+      "name": "overwritten_green_background_does_not_hide_visible_yellow_text",
+      "records": [{"profit": 1}],
+      "columns": ["profit"],
+      "coltypes": [0],
+      "form_data": {
+        "query_mode": "raw",
+        "show_cell_bars": false,
+        "conditional_formatting": [
+          {"column": "profit", "operator": "None", "colorScheme": "colorSuccess", "useGradient": false, "filterable": true},
+          {"column": "profit", "operator": "None", "colorScheme": "colorError", "useGradient": false},
+          {"column": "profit", "operator": "None", "colorScheme": "colorWarning", "useGradient": false, "objectFormatting": "TEXT_COLOR"}
+        ]
+      },
+      "expected": {
+        "styles": [{"profit": {"backgroundColor": "#ff4d4f", "textColor": "rgb(250, 173, 20)", "colors": ["YELLOW", "RED"]}}],
+        "catalog": {"profit": ["YELLOW", "RED"]}
+      }
+    },
+    {
+      "name": "entire_row_stage_wins_even_when_its_rule_was_saved_first",
+      "records": [{"status": "ok", "profit": 7}],
+      "columns": ["status", "profit"],
+      "coltypes": [1, 0],
+      "form_data": {
+        "query_mode": "raw",
+        "show_cell_bars": false,
+        "conditional_formatting": [
+          {"column": "status", "columnFormatting": "ENTIRE_ROW", "operator": "=", "targetValue": "ok", "colorScheme": "colorSuccess", "useGradient": false, "filterable": true},
+          {"column": "profit", "operator": "None", "colorScheme": "colorError", "useGradient": false}
+        ]
+      },
+      "expected": {
+        "styles": [{"status": {"backgroundColor": "#52c41a", "colors": ["GREEN"]}, "profit": {"backgroundColor": "#52c41a", "colors": ["GREEN"]}}],
+        "capabilities": {"status": {"enabled": true, "supported": true}, "profit": {"enabled": true, "supported": true}}
+      }
+    },
+    {
+      "name": "another_target_and_hidden_columns_do_not_create_source_entries",
+      "records": [{"status": "ok", "date": "2026-08-28", "hidden": 9}],
+      "columns": ["status", "date", "hidden"],
+      "coltypes": [1, 2, 0],
+      "form_data": {
+        "query_mode": "raw",
+        "show_cell_bars": false,
+        "column_config": {"hidden": {"visible": false}},
+        "conditional_formatting": [{"column": "status", "columnFormatting": "date", "operator": "=", "targetValue": "ok", "colorScheme": "colorWarning", "useGradient": false, "filterable": true}]
+      },
+      "expected": {
+        "records": [{"status": "ok", "date": "2026-08-28"}],
+        "styles": [{"status": {"colors": []}, "date": {"backgroundColor": "#faad14", "colors": ["YELLOW"]}}],
+        "capabilities": {"status": {"enabled": false, "supported": true}, "date": {"enabled": true, "supported": true}}
+      }
+    },
+    {
+      "name": "custom_blue_is_preserved_but_never_becomes_a_fourth_filter_color",
+      "records": [{"profit": 1}],
+      "columns": ["profit"],
+      "coltypes": [0],
+      "form_data": {
+        "query_mode": "raw",
+        "show_cell_bars": false,
+        "conditional_formatting": [
+          {"column": "profit", "operator": "None", "colorScheme": "colorSuccess", "useGradient": false, "filterable": true},
+          {"column": "profit", "operator": "None", "colorScheme": "#1677ff", "useGradient": false}
+        ]
+      },
+      "expected": {"styles": [{"profit": {"backgroundColor": "#1677ff", "colors": []}}], "catalog": {"profit": []}}
+    },
+    {
+      "name": "theme_changes_preserve_palette_provenance_without_guessing_rgb",
+      "records": [{"profit": 1}],
+      "columns": ["profit"],
+      "coltypes": [0],
+      "theme": {"colorError": "#e04355"},
+      "form_data": {"query_mode": "raw", "show_cell_bars": false, "conditional_formatting": [{"column": "profit", "operator": "None", "colorScheme": "colorError", "useGradient": false, "filterable": true}]},
+      "expected": {"styles": [{"profit": {"backgroundColor": "#e04355", "colors": ["RED"]}}]}
+    },
+    {
+      "name": "native_cell_bar_slice_quirk_and_zero_width_are_preserved",
+      "records": [{"profit": -10}, {"profit": 0}, {"profit": 20}],
+      "columns": ["profit"],
+      "coltypes": [0],
+      "form_data": {
+        "query_mode": "raw",
+        "show_cell_bars": true,
+        "conditional_formatting": [{"column": "profit", "operator": "None", "colorScheme": "colorSuccess", "useGradient": false, "objectFormatting": "CELL_BAR", "filterable": true}]
+      },
+      "expected": {
+        "styles": [
+          {"profit": {"cellBar": {"color": "#52c499", "width": 50, "offset": 0, "min": 0, "max": 20}, "colors": ["GREEN"]}},
+          {"profit": {"colors": []}},
+          {"profit": {"cellBar": {"color": "#52c499", "width": 100, "offset": 0, "min": 0, "max": 20}, "colors": ["GREEN"]}}
+        ],
+        "capabilities": {"profit": {"enabled": true, "supported": true}}
+      }
+    },
+    {
+      "name": "gradient_color_stays_frozen_to_each_original_page",
+      "records": [{"profit": 0}, {"profit": 20}, {"profit": 0}, {"profit": 200}],
+      "columns": ["profit"],
+      "coltypes": [0],
+      "source_page_size": 2,
+      "form_data": {"query_mode": "raw", "show_cell_bars": false, "conditional_formatting": [{"column": "profit", "operator": "None", "colorScheme": "colorError", "filterable": true}]},
+      "expected": {
+        "styles": [{"profit": {"backgroundColor": "#ff4d4f00", "colors": []}}, {"profit": {"backgroundColor": "#ff4d4fFF", "colors": ["RED"]}}, {"profit": {"backgroundColor": "#ff4d4f00", "colors": []}}, {"profit": {"backgroundColor": "#ff4d4fFF", "colors": ["RED"]}}],
+        "capabilities": {"profit": {"enabled": true, "supported": false, "reason": {"code": "TABLE_COLOR_FILTER_GRADIENT_UNSUPPORTED", "message": "This column contains gradient formatting; color filtering is unavailable."}}}
+      }
+    },
+    {
+      "name": "explicit_text_is_opaque_even_if_legacy_gradient_alpha_is_zero",
+      "records": [{"profit": 0}, {"profit": 20}],
+      "columns": ["profit"],
+      "coltypes": [0],
+      "form_data": {"query_mode": "raw", "show_cell_bars": false, "conditional_formatting": [{"column": "profit", "operator": "None", "colorScheme": "colorSuccess", "objectFormatting": "TEXT_COLOR", "filterable": true}]},
+      "expected": {
+        "styles": [{"profit": {"textColor": "rgb(82, 196, 26)", "colors": ["GREEN"]}}, {"profit": {"textColor": "rgb(82, 196, 26)", "colors": ["GREEN"]}}],
+        "capabilities": {"profit": {"enabled": true, "supported": true}}
+      }
+    },
+    {
+      "name": "boolean_non_null_does_not_expand_to_numeric_or_text_non_null",
+      "records": [{"value": true}, {"value": false}, {"value": null}, {"value": 1}, {"value": "true"}],
+      "columns": ["value"],
+      "coltypes": [3],
+      "form_data": {"show_cell_bars": false, "conditional_formatting": [
+        {"column": "value", "operator": "is not null", "targetValue": 0, "colorScheme": "colorSuccess", "useGradient": false, "filterable": true},
+        {"column": "value", "operator": "is null", "targetValue": 0, "colorScheme": "colorError", "useGradient": false}
+      ]},
+      "expected": {"styles": [
+        {"value": {"backgroundColor": "#52c41a", "colors": ["GREEN"]}},
+        {"value": {"backgroundColor": "#52c41a", "colors": ["GREEN"]}},
+        {"value": {"backgroundColor": "#ff4d4f", "colors": ["RED"]}},
+        {"value": {"colors": []}},
+        {"value": {"colors": []}}
+      ]}
+    },
+    {
+      "name": "strings_preserve_case_sensitive_prefix_and_case_insensitive_contains",
+      "records": [{"value": "Abc"}, {"value": "abc"}, {"value": "xAB"}, {"value": "other"}, {"value": " "}],
+      "columns": ["value"],
+      "coltypes": [1],
+      "form_data": {"show_cell_bars": false, "conditional_formatting": [
+        {"column": "value", "operator": "begins with", "targetValue": "Ab", "colorScheme": "colorSuccess", "useGradient": false, "filterable": true},
+        {"column": "value", "operator": "containing", "targetValue": "aB", "colorScheme": "colorWarning", "objectFormatting": "TEXT_COLOR", "useGradient": false}
+      ]},
+      "expected": {"styles": [
+        {"value": {"backgroundColor": "#52c41a", "textColor": "rgb(250, 173, 20)", "colors": ["GREEN", "YELLOW"]}},
+        {"value": {"textColor": "rgb(250, 173, 20)", "colors": ["YELLOW"]}},
+        {"value": {"textColor": "rgb(250, 173, 20)", "colors": ["YELLOW"]}},
+        {"value": {"colors": []}},
+        {"value": {"colors": []}}
+      ]}
+    },
+    {
+      "name": "numeric_comparison_coerces_but_equality_remains_strict",
+      "records": [{"value": 1}, {"value": "1"}, {"value": true}, {"value": null}],
+      "columns": ["value"],
+      "coltypes": [1],
+      "form_data": {"show_cell_bars": false, "conditional_formatting": [
+        {"column": "value", "operator": "=", "targetValue": 1, "colorScheme": "colorError", "useGradient": false, "filterable": true},
+        {"column": "value", "operator": "≥", "targetValue": 1, "colorScheme": "colorSuccess", "objectFormatting": "TEXT_COLOR", "useGradient": false}
+      ]},
+      "expected": {"styles": [
+        {"value": {"backgroundColor": "#ff4d4f", "textColor": "rgb(82, 196, 26)", "colors": ["GREEN", "RED"]}},
+        {"value": {"textColor": "rgb(82, 196, 26)", "colors": ["GREEN"]}},
+        {"value": {"textColor": "rgb(82, 196, 26)", "colors": ["GREEN"]}},
+        {"value": {"colors": []}}
+      ]}
+    },
+    {
+      "name": "hidden_numeric_source_can_still_block_its_visible_gradient_target",
+      "records": [{"source": 0, "target": "a"}, {"source": 1, "target": "b"}],
+      "columns": ["source", "target"],
+      "coltypes": [0, 1],
+      "form_data": {"show_cell_bars": false, "column_config": {"source": {"visible": false}}, "conditional_formatting": [
+        {"column": "source", "columnFormatting": "target", "operator": "None", "colorScheme": "colorError", "filterable": true}
+      ]},
+      "expected": {
+        "styles": [{"target": {"backgroundColor": "#ff4d4f00", "colors": []}}, {"target": {"backgroundColor": "#ff4d4fFF", "colors": ["RED"]}}],
+        "capabilities": {"target": {"enabled": true, "supported": false, "reason": {"code": "TABLE_COLOR_FILTER_GRADIENT_UNSUPPORTED", "message": "This column contains gradient formatting; color filtering is unavailable."}}}
+      }
+    },
+    {
+      "name": "percentage_output_uses_post_processed_values_and_keeps_source_hidden",
+      "records": [{"amount": 90, "%amount": 0.9}, {"amount": 10, "%amount": 0.1}],
+      "columns": ["amount", "%amount"],
+      "coltypes": [0, 0],
+      "form_data": {"metrics": [], "percent_metrics": ["amount"], "show_cell_bars": false, "conditional_formatting": [
+        {"column": "%amount", "operator": ">", "targetValue": 0.5, "colorScheme": "colorWarning", "useGradient": false, "filterable": true}
+      ]},
+      "expected": {
+        "records": [{"%amount": 0.9}, {"%amount": 0.1}],
+        "styles": [{"%amount": {"backgroundColor": "#faad14", "colors": ["YELLOW"]}}, {"%amount": {"colors": []}}]
+      }
+    },
+    {
+      "name": "time_comparison_reversed_scheme_is_derived_from_actual_color",
+      "records": [{"profit": 10, "profit__1 year ago": 5}],
+      "columns": ["profit", "profit__1 year ago"],
+      "coltypes": [0, 0],
+      "form_data": {
+        "query_mode": "aggregate",
+        "metrics": ["profit"],
+        "time_compare": ["1 year ago"],
+        "comparison_type": "values",
+        "comparison_color_enabled": true,
+        "comparison_color_scheme": "Green",
+        "conditional_formatting": [{"column": "Main profit", "colorScheme": "Red", "filterable": true}]
+      },
+      "expected": {
+        "records": [{"Main profit": 10, "# profit": 5, "△ profit": 5, "% profit": 1}],
+        "styles": [{
+          "Main profit": {"backgroundColor": "rgba(150,0,0,0.2)", "arrow": {"color": "#ff4d4f", "symbol": "↑"}, "colors": ["RED"]},
+          "# profit": {"backgroundColor": "rgba(0,150,0,0.2)", "colors": ["GREEN"]},
+          "△ profit": {"backgroundColor": "rgba(0,150,0,0.2)", "colors": ["GREEN"]},
+          "% profit": {"backgroundColor": "rgba(0,150,0,0.2)", "colors": ["GREEN"]}
+        }]
+      }
+    },
+    {
+      "name": "gradient_round_uses_native_decimal_exponent_shift",
+      "records": [{"value": 0}, {"value": 0.145}, {"value": 1}],
+      "columns": ["value"],
+      "coltypes": [0],
+      "form_data": {"show_cell_bars": false, "conditional_formatting": [
+        {"column": "value", "operator": "None", "colorScheme": "colorError", "filterable": true}
+      ]},
+      "expected": {"styles": [
+        {"value": {"backgroundColor": "#ff4d4f00", "colors": []}},
+        {"value": {"backgroundColor": "#ff4d4f26", "colors": ["RED"]}},
+        {"value": {"backgroundColor": "#ff4d4fFF", "colors": ["RED"]}}
+      ]}
+    },
+    {
+      "name": "cell_bar_below_half_percent_is_not_a_visible_color",
+      "records": [{"value": 0.004999999999999999}, {"value": 1}],
+      "columns": ["value"],
+      "coltypes": [0],
+      "form_data": {"query_mode": "raw"},
+      "expected": {"styles": [
+        {"value": {"colors": []}},
+        {"value": {"cellBar": {"color": "#52c41a50", "width": 100, "offset": 0, "min": 0, "max": 1}, "colors": ["GREEN"]}}
+      ]}
+    }
+  ]
+}

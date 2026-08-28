@@ -23,6 +23,7 @@ import {
 } from '@superset-ui/chart-controls';
 import { supersetTheme } from '@apache-superset/core/theme';
 import {
+  act,
   render,
   screen,
   fireEvent,
@@ -36,6 +37,7 @@ import {
   TimeGranularity,
   SMART_DATE_ID,
   getTimeFormatterForGranularity,
+  TableColorMetadata,
 } from '@superset-ui/core';
 import { CellProps, Column, HeaderProps } from 'react-table';
 import DataTable from '../src/DataTable/DataTable';
@@ -77,273 +79,685 @@ test('sanitizeHeaderId should sanitize percent sign', () => {
   expect(sanitizeHeaderId('%pct_nice')).toBe('percentpct_nice');
 });
 
-test('table header alert menu updates ownState and resets server pagination', async () => {
+const colorRule = {
+  ruleId: '772a548e-72f7-4ac8-a8ff-fdb7465b3ccd',
+  filterable: true,
+  column: 'sum__num',
+  operator: '>',
+  targetValue: 100,
+  colorScheme: 'colorError',
+  useGradient: false,
+};
+
+const colorMetadata: Extract<TableColorMetadata, { status: 'ready' }> = {
+  status: 'ready',
+  snapshot_id: 'snapshot-1',
+  generation: 'generation-1',
+  baseline_rowcount: 10,
+  filtered_rowcount: 10,
+  source_page_size: 20,
+  catalog: { sum__num: ['GREEN', 'YELLOW', 'RED'] },
+  capabilities: { sum__num: { enabled: true, supported: true } },
+  styles: [],
+  expires_in: 300,
+  selections: [],
+};
+
+const colorProps = (setDataMask = jest.fn(), serverPagination = false) =>
+  transformProps({
+    ...testData.advanced,
+    ownState: { currentPage: 4, pageSize: 20, searchColumn: 'name' },
+    hooks: { ...testData.advanced.hooks, setDataMask },
+    rawFormData: {
+      ...testData.advanced.rawFormData,
+      server_pagination: serverPagination,
+      conditional_formatting: [colorRule],
+    },
+    queriesData: testData.advanced.queriesData.map((query, index) =>
+      index === 0
+        ? {
+            ...query,
+            table_color_metadata: {
+              ...colorMetadata,
+              catalog: { sum__num: [...colorMetadata.catalog.sum__num] },
+            },
+          }
+        : query,
+    ),
+  });
+
+test.each([false, true])(
+  'color selection works with server pagination %s and preserves the complete state',
+  async serverPagination => {
+    const previousFlags = window.featureFlags;
+    window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
+    const setDataMask = jest.fn();
+    try {
+      const props = colorProps(setDataMask, serverPagination);
+      render(
+        <ProviderWrapper>
+          <TableChart {...props} sticky={false} />
+        </ProviderWrapper>,
+      );
+      fireEvent.click(screen.getByLabelText('Filter by color for sum__num'));
+      fireEvent.click(
+        await screen.findByRole('menuitemcheckbox', { name: 'Red' }),
+      );
+      await waitFor(() =>
+        expect(setDataMask).toHaveBeenLastCalledWith({
+          ownState: expect.objectContaining({
+            currentPage: 0,
+            pageSize: 20,
+            searchColumn: 'name',
+            alertFilter: {
+              version: 2,
+              selections: [{ column: 'sum__num', colors: ['RED'] }],
+              snapshotId: 'snapshot-1',
+              generation: 'generation-1',
+            },
+          }),
+        }),
+      );
+      expect(
+        setDataMask.mock.calls.every(
+          ([mask]) => !('alertFilters' in mask.ownState),
+        ),
+      ).toBe(true);
+    } finally {
+      window.featureFlags = previousFlags;
+    }
+  },
+);
+
+test('third color and another column are retained during rapid requests', async () => {
   const previousFlags = window.featureFlags;
   window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
   const setDataMask = jest.fn();
   try {
-    const props = transformProps({
-      ...testData.advanced,
-      ownState: { currentPage: 4, pageSize: 25 },
-      hooks: {
-        ...testData.advanced.hooks,
-        setDataMask,
+    const props = colorProps(setDataMask);
+    props.tableOwnState = {
+      ...props.tableOwnState,
+      alertFilter: {
+        version: 2,
+        selections: [{ column: 'other', colors: ['RED'] }],
       },
-      rawFormData: {
-        ...testData.advanced.rawFormData,
-        conditional_formatting: [
-          {
-            ruleId: '772a548e-72f7-4ac8-a8ff-fdb7465b3ccd',
-            subjectRef: { kind: 'saved_metric', key: 'sum__num' },
-            alertLevel: 'RED',
-            filterable: true,
-            column: 'sum__num',
-            operator: '>',
-            targetValue: 100,
-            colorScheme: '#f00',
-            useGradient: false,
-          },
-        ],
-      },
-    });
+    };
     render(
       <ProviderWrapper>
         <TableChart {...props} sticky={false} />
       </ProviderWrapper>,
     );
-
-    const filterButton = screen.getByLabelText(
-      'Filter by alert level for sum__num',
-    );
-    fireEvent.click(filterButton);
-    const redAlert = await screen.findByRole('menuitemcheckbox', {
-      name: 'Critical alert',
-    });
-    const disabledWarning = screen.getByRole('menuitemcheckbox', {
-      name: 'Warning alert',
-    });
-    expect(disabledWarning).toHaveAttribute('aria-disabled', 'true');
-    expect(
-      within(disabledWarning).getByTestId('alert-level-swatch-yellow'),
-    ).toHaveStyle(`background-color: ${supersetTheme.colorTextDisabled}`);
-    fireEvent.click(redAlert);
-
-    await waitFor(() => {
-      expect(setDataMask).toHaveBeenLastCalledWith({
-        ownState: {
-          currentPage: 0,
-          pageSize: 25,
-          alertFilters: [
-            {
-              ruleId: '772a548e-72f7-4ac8-a8ff-fdb7465b3ccd',
-              level: 'RED',
-            },
+    for (const name of ['Green', 'Yellow', 'Red']) {
+      fireEvent.click(screen.getByLabelText('Filter by color for sum__num'));
+      fireEvent.click(await screen.findByRole('menuitemcheckbox', { name }));
+    }
+    expect(setDataMask).toHaveBeenLastCalledWith({
+      ownState: expect.objectContaining({
+        alertFilter: expect.objectContaining({
+          selections: [
+            { column: 'other', colors: ['RED'] },
+            { column: 'sum__num', colors: ['GREEN', 'YELLOW', 'RED'] },
           ],
-        },
-      });
+        }),
+      }),
     });
+    fireEvent.click(screen.getByLabelText('Filter by color for sum__num'));
+    fireEvent.click(
+      await screen.findByRole('menuitemcheckbox', { name: 'Yellow' }),
+    );
+    expect(
+      setDataMask.mock.calls.at(-1)?.[0].ownState.alertFilter.selections[1]
+        .colors,
+    ).toEqual(['GREEN', 'RED']);
+    fireEvent.click(screen.getByLabelText('Filter by color for sum__num'));
+    fireEvent.click(await screen.findByText('Clear color filter'));
+    expect(
+      setDataMask.mock.calls.at(-1)?.[0].ownState.alertFilter.selections,
+    ).toEqual([{ column: 'other', colors: ['RED'] }]);
   } finally {
     window.featureFlags = previousFlags;
   }
 });
 
-test('table header alert menu stays hidden when feature flag is disabled', () => {
+test('color menu uses color swatches without business-level labels', async () => {
+  const previousFlags = window.featureFlags;
+  window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
+  try {
+    render(
+      <ProviderWrapper>
+        <TableChart {...colorProps()} sticky={false} />
+      </ProviderWrapper>,
+    );
+    fireEvent.click(screen.getByLabelText('Filter by color for sum__num'));
+    const red = await screen.findByRole('menuitemcheckbox', { name: 'Red' });
+    const swatch = within(red).getByTestId('alert-color-swatch-red');
+    expect(swatch).toHaveAttribute('aria-hidden', 'true');
+    expect(swatch).toHaveStyle({ backgroundColor: supersetTheme.colorError });
+    expect(
+      screen.queryByText(
+        /Critical alert|Warning alert|Normal status|Alert level/,
+      ),
+    ).not.toBeInTheDocument();
+    fireEvent.focus(red);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('Red');
+  } finally {
+    window.featureFlags = previousFlags;
+  }
+});
+
+test('unavailable snapshots retain a visible entry and an explanation', async () => {
+  const previousFlags = window.featureFlags;
+  window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
+  const setDataMask = jest.fn();
+  try {
+    const props = colorProps(setDataMask);
+    props.tableColorMetadata = {
+      status: 'unavailable',
+      capabilities: colorMetadata.capabilities,
+      reason: {
+        code: 'TABLE_COLOR_FILTER_LIMIT_EXCEEDED',
+        message: 'Color filtering requires at most 1000 result rows.',
+      },
+    };
+    render(
+      <ProviderWrapper>
+        <TableChart {...props} sticky={false} />
+      </ProviderWrapper>,
+    );
+    fireEvent.click(screen.getByLabelText('Filter by color for sum__num'));
+    await waitFor(() =>
+      expect(
+        screen.getByText('Color filtering requires at most 1000 result rows.'),
+      ).toBeVisible(),
+    );
+    expect(screen.queryByRole('menuitemcheckbox')).not.toBeInTheDocument();
+    expect(setDataMask).not.toHaveBeenCalled();
+  } finally {
+    window.featureFlags = previousFlags;
+  }
+});
+
+test('color menu stays hidden when its feature flag is disabled', () => {
   const previousFlags = window.featureFlags;
   window.featureFlags = { [FeatureFlag.TableAlertFilters]: false };
   try {
-    const props = transformProps({
-      ...testData.advanced,
-      rawFormData: {
-        ...testData.advanced.rawFormData,
-        conditional_formatting: [
-          {
-            ruleId: '772a548e-72f7-4ac8-a8ff-fdb7465b3ccd',
-            subjectRef: { kind: 'saved_metric', key: 'sum__num' },
-            alertLevel: 'RED',
-            filterable: true,
-            column: 'sum__num',
-            operator: '>',
-            targetValue: 100,
-            colorScheme: '#f00',
-            useGradient: false,
-          },
-        ],
-      },
-    });
     render(
       <ProviderWrapper>
-        <TableChart {...props} sticky={false} />
+        <TableChart {...colorProps()} sticky={false} />
       </ProviderWrapper>,
     );
-
     expect(
-      screen.queryByLabelText('Filter by alert level for sum__num'),
+      screen.queryByLabelText('Filter by color for sum__num'),
     ).not.toBeInTheDocument();
   } finally {
     window.featureFlags = previousFlags;
   }
 });
 
-test('table header alert menu uses accessible color swatches and tooltips', async () => {
+test('frozen styles drive filtered cells and bars without recomputing their range', () => {
   const previousFlags = window.featureFlags;
   window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
-  const redRuleId = '772a548e-72f7-4ac8-a8ff-fdb7465b3ccd';
+  try {
+    const props = colorProps();
+    props.data = [props.data[0]];
+    props.tableColorMetadata = {
+      ...colorMetadata,
+      catalog: { sum__num: ['GREEN'] },
+      filtered_rowcount: 1,
+      styles: [
+        {
+          sum__num: {
+            cellBar: {
+              color: supersetTheme.colorSuccess,
+              width: 25,
+              offset: 12,
+              min: -10,
+              max: 100,
+            },
+            colors: ['GREEN'],
+          },
+          '%pct_nice': {
+            backgroundColor: supersetTheme.colorWarning,
+            colors: ['YELLOW'],
+          },
+        },
+      ],
+    };
+    const { container } = render(
+      <ProviderWrapper>
+        <TableChart {...props} sticky={false} />
+      </ProviderWrapper>,
+    );
+    const metricCell = container.querySelector(
+      'td[aria-labelledby="header-sum_num"]',
+    );
+    expect(metricCell).not.toBeNull();
+    expect(metricCell).not.toHaveStyle({
+      backgroundColor: supersetTheme.colorError,
+    });
+    expect(metricCell?.querySelector('.cell-bar')).toHaveStyle({
+      width: '25%',
+      left: '12%',
+      backgroundColor: supersetTheme.colorSuccess,
+    });
+    expect(
+      container.querySelector('td[aria-labelledby="header-percentpct_nice"]'),
+    ).toHaveStyle({ backgroundColor: supersetTheme.colorWarning });
+  } finally {
+    window.featureFlags = previousFlags;
+  }
+});
+
+test('an absent frozen bar never falls back to the local filtered value range', () => {
+  const previousFlags = window.featureFlags;
+  window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
+  try {
+    const props = colorProps();
+    props.data = [props.data[0]];
+    props.showCellBars = true;
+    props.tableColorMetadata = {
+      ...colorMetadata,
+      filtered_rowcount: 1,
+      styles: [{ sum__num: { colors: [] } }],
+    };
+    const { container } = render(
+      <ProviderWrapper>
+        <TableChart {...props} sticky={false} />
+      </ProviderWrapper>,
+    );
+    const metricCell = container.querySelector(
+      'td[aria-labelledby="header-sum_num"]',
+    );
+    expect(metricCell).not.toBeNull();
+    expect(metricCell?.querySelector('.cell-bar')).toBeNull();
+  } finally {
+    window.featureFlags = previousFlags;
+  }
+});
+
+test('enabling color filtering clears an obsolete local export without losing selections', async () => {
+  const previousFlags = window.featureFlags;
+  window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
   const setDataMask = jest.fn();
   try {
-    const props = transformProps({
-      ...testData.advanced,
-      hooks: {
-        ...testData.advanced.hooks,
-        setDataMask,
+    const props = colorProps(setDataMask);
+    props.tableOwnState = {
+      ...props.tableOwnState,
+      alertFilter: {
+        version: 2,
+        selections: [{ column: 'sum__num', colors: ['GREEN'] }],
       },
-      ownState: {
-        alertFilters: [{ ruleId: redRuleId, level: 'RED' }],
+      clientView: {
+        rows: [{ sum__num: -999 }],
+        columns: [{ key: 'sum__num', label: 'Profit' }],
+        count: 1,
       },
-      rawFormData: {
-        ...testData.advanced.rawFormData,
-        conditional_formatting: [
-          {
-            ruleId: redRuleId,
-            subjectRef: { kind: 'saved_metric', key: 'sum__num' },
-            alertLevel: 'RED',
-            filterable: true,
-            column: 'sum__num',
-            operator: '>',
-            targetValue: 100,
-            colorScheme: '#f00',
-            useGradient: false,
-          },
-          {
-            ruleId: '99ab3f13-81cb-433b-8615-1290f4ddf6cc',
-            subjectRef: { kind: 'saved_metric', key: 'sum__num' },
-            alertLevel: 'YELLOW',
-            filterable: true,
-            column: 'sum__num',
-            operator: '>',
-            targetValue: 50,
-            colorScheme: '#ff0',
-            useGradient: false,
-          },
-          {
-            ruleId: '4d365b0c-0aca-43e8-97a7-efb01b94e8f2',
-            subjectRef: { kind: 'saved_metric', key: 'sum__num' },
-            alertLevel: 'GREEN',
-            filterable: true,
-            column: 'sum__num',
-            operator: '<=',
-            targetValue: 50,
-            colorScheme: '#0f0',
-            useGradient: false,
-          },
-        ],
-      },
-    });
+    };
     render(
       <ProviderWrapper>
         <TableChart {...props} sticky={false} />
       </ProviderWrapper>,
     );
-
-    const iconFilterButton = screen.getByLabelText(
-      'Filter by alert level for sum__num',
+    await waitFor(() =>
+      expect(setDataMask).toHaveBeenCalledWith({
+        ownState: { ...props.tableOwnState, clientView: undefined },
+      }),
     );
-    fireEvent.click(iconFilterButton);
-    const redAlert = await screen.findByRole('menuitemcheckbox', {
-      name: 'Critical alert',
-    });
-    const yellowAlert = screen.getByRole('menuitemcheckbox', {
-      name: 'Warning alert',
-    });
-    const greenAlert = screen.getByRole('menuitemcheckbox', {
-      name: 'Normal status',
-    });
+  } finally {
+    window.featureFlags = previousFlags;
+  }
+});
 
+test('client search and sorting publish only ordered snapshot row references, including an empty view', async () => {
+  const previousFlags = window.featureFlags;
+  window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
+  const setDataMask = jest.fn();
+  try {
+    const props = colorProps(setDataMask);
+    props.data = [
+      { name: 'Zulu', sum__num: 30, '%pct_nice': 0.5 },
+      { name: 'Amy', sum__num: 10, '%pct_nice': 0.2 },
+      { name: 'Bob', sum__num: 20, '%pct_nice': 0.3 },
+    ];
+    props.includeSearch = true;
+    props.sortDesc = false;
+    props.tableOwnState = { pageSize: 20 };
+    props.serverPaginationData = props.tableOwnState;
+    props.tableColorMetadata = {
+      ...colorMetadata,
+      row_indices: [4, 2, 9],
+      filtered_rowcount: 3,
+      styles: [{}, {}, {}],
+    };
+    const { container, rerender } = render(
+      <ProviderWrapper>
+        <TableChart {...props} sticky={false} />
+      </ProviderWrapper>,
+    );
+    const expectProjection = async (rowIndices: number[]) => {
+      await waitFor(() =>
+        expect(setDataMask).toHaveBeenLastCalledWith({
+          ownState: {
+            pageSize: 20,
+            clientView: {
+              rows: [],
+              columns: expect.any(Array),
+              count: rowIndices.length,
+              snapshotId: 'snapshot-1',
+              rowIndices,
+            },
+          },
+        }),
+      );
+    };
+    await expectProjection([4, 2, 9]);
+    // Redux/transformProps can replace equivalent data arrays when clientView
+    // updates. The immutable source key must keep the valid projection alive.
+    rerender(
+      <ProviderWrapper>
+        <TableChart
+          {...props}
+          data={props.data.map(row => ({ ...row }))}
+          tableOwnState={setDataMask.mock.lastCall?.[0].ownState}
+          sticky={false}
+        />
+      </ProviderWrapper>,
+    );
+    await expectProjection([4, 2, 9]);
+    fireEvent.click(container.querySelector('#header-name')!);
+    await expectProjection([2, 9, 4]);
+    fireEvent.change(
+      screen.getByRole('textbox', { name: 'Search 3 records' }),
+      {
+        target: { value: 'Amy' },
+      },
+    );
+    await expectProjection([2]);
+    fireEvent.change(
+      screen.getByRole('textbox', { name: 'Search 3 records' }),
+      {
+        target: { value: 'no matching record' },
+      },
+    );
+    await expectProjection([]);
+  } finally {
+    window.featureFlags = previousFlags;
+  }
+});
+
+test('removing the last enabled formatter removes its selection without losing other own state', async () => {
+  const previousFlags = window.featureFlags;
+  window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
+  const setDataMask = jest.fn();
+  try {
+    const props = colorProps(setDataMask);
+    props.tableOwnState = {
+      ...props.tableOwnState,
+      alertFilter: {
+        version: 2,
+        selections: [{ column: 'sum__num', colors: ['GREEN'] }],
+        snapshotId: 'snapshot-1',
+      },
+    };
+    const { rerender } = render(
+      <ProviderWrapper>
+        <TableChart {...props} sticky={false} />
+      </ProviderWrapper>,
+    );
+    rerender(
+      <ProviderWrapper>
+        <TableChart
+          {...props}
+          alertFormattingRules={[{ ...colorRule, filterable: false }]}
+          sticky={false}
+        />
+      </ProviderWrapper>,
+    );
     expect(
-      screen.queryByText(
-        /^(RED|YELLOW|GREEN|Red alert|Yellow alert|Green alert)$/,
-      ),
+      screen.queryByLabelText('Filter by color for sum__num'),
     ).not.toBeInTheDocument();
-    expect(redAlert).toHaveAttribute('aria-checked', 'true');
-    expect(yellowAlert).toHaveAttribute('aria-checked', 'false');
-    expect(greenAlert).toHaveAttribute('aria-checked', 'false');
-    expect(within(redAlert).getByTestId('check')).toHaveAttribute(
-      'aria-hidden',
-      'true',
-    );
-
-    const redSwatch = within(redAlert).getByTestId('alert-level-swatch-red');
-    const yellowSwatch = within(yellowAlert).getByTestId(
-      'alert-level-swatch-yellow',
-    );
-    const greenSwatch = within(greenAlert).getByTestId(
-      'alert-level-swatch-green',
-    );
-    expect(redSwatch).toHaveAttribute('aria-hidden', 'true');
-    expect(yellowSwatch).toHaveAttribute('aria-hidden', 'true');
-    expect(greenSwatch).toHaveAttribute('aria-hidden', 'true');
-    expect(redSwatch).not.toHaveAttribute('swatchcolor');
-    expect(redSwatch).toHaveStyle({
-      backgroundColor: supersetTheme.colorError,
-      width: `${supersetTheme.sizeUnit * 4}px`,
-      height: `${supersetTheme.sizeUnit * 4}px`,
-    });
-    expect(yellowSwatch).toHaveStyle({
-      backgroundColor: supersetTheme.colorWarning,
-      width: `${supersetTheme.sizeUnit * 4}px`,
-      height: `${supersetTheme.sizeUnit * 4}px`,
-    });
-    expect(greenSwatch).toHaveStyle({
-      backgroundColor: supersetTheme.colorSuccess,
-      width: `${supersetTheme.sizeUnit * 4}px`,
-      height: `${supersetTheme.sizeUnit * 4}px`,
-    });
-    expect(within(redAlert).queryByTestId('stop')).not.toBeInTheDocument();
-    expect(
-      within(yellowAlert).queryByTestId('warning'),
-    ).not.toBeInTheDocument();
-    expect(
-      within(greenAlert).queryByTestId('check-circle'),
-    ).not.toBeInTheDocument();
-
-    const hiddenRedLabel = within(redAlert).getByText('Critical alert');
-    expect(hiddenRedLabel).toHaveStyle({
-      position: 'absolute',
-      width: '1px',
-      height: '1px',
-      overflow: 'hidden',
-    });
-    const redLabel = hiddenRedLabel.parentElement;
-    expect(redLabel).not.toBeNull();
-    fireEvent.mouseEnter(redLabel as HTMLElement);
-    expect(await screen.findByRole('tooltip')).toHaveTextContent(
-      'Critical alert',
-    );
-    fireEvent.blur(redAlert);
-    fireEvent.mouseLeave(redLabel as HTMLElement);
-    await waitFor(() => {
-      expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
-    });
-
-    fireEvent.focus(redAlert);
-    expect(await screen.findByRole('tooltip')).toHaveTextContent(
-      'Critical alert',
-    );
-    fireEvent.keyDown(redAlert, {
-      key: 'Enter',
-      code: 'Enter',
-      keyCode: 13,
-      which: 13,
-    });
-    fireEvent.blur(redAlert);
-    await waitFor(() => {
+    await waitFor(() =>
       expect(setDataMask).toHaveBeenLastCalledWith({
-        ownState: {
-          alertFilters: [],
+        ownState: expect.objectContaining({
+          pageSize: 20,
+          searchColumn: 'name',
           currentPage: 0,
+          alertFilter: { version: 2, selections: [] },
+        }),
+      }),
+    );
+  } finally {
+    window.featureFlags = previousFlags;
+  }
+});
+
+test.each([false, true])(
+  'hiding a selected target with unchanged rules clears its state and export projection with server pagination %s',
+  async serverPagination => {
+    const previousFlags = window.featureFlags;
+    window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
+    const setDataMask = jest.fn();
+    try {
+      const props = colorProps(setDataMask, serverPagination);
+      props.tableOwnState = {
+        currentPage: 0,
+        pageSize: 20,
+        searchColumn: 'name',
+        alertFilter: {
+          version: 2,
+          selections: [{ column: 'sum__num', colors: ['GREEN'] }],
+          snapshotId: 'snapshot-1',
+          generation: 'generation-1',
         },
+      };
+      props.serverPaginationData = props.tableOwnState;
+      const rowIndices = props.data.map((_row, index) => index);
+      props.tableColorMetadata = {
+        ...colorMetadata,
+        row_indices: rowIndices,
+        selections: props.tableOwnState.alertFilter?.selections,
+      };
+      const { rerender } = render(
+        <ProviderWrapper>
+          <TableChart {...props} sticky={false} />
+        </ProviderWrapper>,
+      );
+      if (!serverPagination) {
+        await waitFor(() =>
+          expect(setDataMask).toHaveBeenLastCalledWith({
+            ownState: expect.objectContaining({
+              clientView: expect.objectContaining({
+                snapshotId: 'snapshot-1',
+                rowIndices,
+              }),
+            }),
+          }),
+        );
+        props.tableOwnState = setDataMask.mock.lastCall?.[0].ownState;
+      }
+      setDataMask.mockClear();
+      const hiddenColumns = props.columns.map(column =>
+        column.key === 'sum__num'
+          ? { ...column, config: { ...column.config, visible: false } }
+          : column,
+      );
+      rerender(
+        <ProviderWrapper>
+          <TableChart {...props} columns={hiddenColumns} sticky={false} />
+        </ProviderWrapper>,
+      );
+
+      expect(
+        screen.queryByLabelText('Filter by color for sum__num'),
+      ).not.toBeInTheDocument();
+      await waitFor(() =>
+        expect(setDataMask).toHaveBeenLastCalledWith({
+          ownState: expect.objectContaining({
+            currentPage: 0,
+            pageSize: 20,
+            searchColumn: 'name',
+            alertFilter: { version: 2, selections: [] },
+          }),
+        }),
+      );
+      const clearedState = setDataMask.mock.lastCall?.[0].ownState;
+      const metadata: Extract<TableColorMetadata, { status: 'ready' }> = {
+        ...colorMetadata,
+        snapshot_id: 'snapshot-after-hide',
+        generation: 'generation-after-hide',
+        row_indices: rowIndices,
+        capabilities: {},
+        catalog: {},
+        selections: [],
+      };
+      rerender(
+        <ProviderWrapper>
+          <TableChart
+            {...props}
+            columns={hiddenColumns}
+            tableOwnState={clearedState}
+            serverPaginationData={clearedState}
+            tableColorMetadata={metadata}
+            sticky={false}
+          />
+        </ProviderWrapper>,
+      );
+      if (!serverPagination) {
+        await waitFor(() =>
+          expect(setDataMask).toHaveBeenLastCalledWith({
+            ownState: expect.objectContaining({
+              alertFilter: { version: 2, selections: [] },
+              clientView: {
+                rows: [],
+                columns: expect.not.arrayContaining([
+                  expect.objectContaining({ key: 'sum__num' }),
+                ]),
+                count: rowIndices.length,
+                snapshotId: 'snapshot-after-hide',
+                rowIndices,
+              },
+            }),
+          }),
+        );
+      }
+      const finalState = setDataMask.mock.lastCall?.[0].ownState;
+      setDataMask.mockClear();
+      rerender(
+        <ProviderWrapper>
+          <TableChart
+            {...props}
+            columns={hiddenColumns.map(column => ({ ...column }))}
+            alertFormattingRules={props.alertFormattingRules?.map(rule => ({
+              ...rule,
+            }))}
+            tableOwnState={{ ...finalState }}
+            serverPaginationData={{ ...finalState }}
+            tableColorMetadata={{ ...metadata }}
+            sticky={false}
+          />
+        </ProviderWrapper>,
+      );
+      await act(async () => {
+        await new Promise<void>(resolve => {
+          requestAnimationFrame(() => resolve());
+        });
       });
-      expect(iconFilterButton).not.toHaveAttribute('aria-expanded', 'true');
-    });
+      expect(setDataMask).not.toHaveBeenCalled();
+    } finally {
+      window.featureFlags = previousFlags;
+    }
+  },
+);
+
+test.each([false, true])(
+  'equivalent formatter capabilities preserve selections without repeated state updates with server pagination %s',
+  async serverPagination => {
+    const previousFlags = window.featureFlags;
+    window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
+    const setDataMask = jest.fn();
+    try {
+      const props = colorProps(setDataMask, serverPagination);
+      props.tableOwnState = {
+        pageSize: 20,
+        alertFilter: {
+          version: 2,
+          selections: [{ column: 'sum__num', colors: ['GREEN', 'RED'] }],
+          snapshotId: 'snapshot-1',
+        },
+      };
+      props.serverPaginationData = props.tableOwnState;
+      const { rerender } = render(
+        <ProviderWrapper>
+          <TableChart {...props} sticky={false} />
+        </ProviderWrapper>,
+      );
+      await act(async () => {
+        await new Promise<void>(resolve => {
+          requestAnimationFrame(() => resolve());
+        });
+      });
+      setDataMask.mockClear();
+      rerender(
+        <ProviderWrapper>
+          <TableChart
+            {...props}
+            columns={props.columns.map(column => ({ ...column }))}
+            alertFormattingRules={props.alertFormattingRules?.map(rule => ({
+              ...rule,
+            }))}
+            tableOwnState={{ ...props.tableOwnState }}
+            sticky={false}
+          />
+        </ProviderWrapper>,
+      );
+      await act(async () => {
+        await new Promise<void>(resolve => {
+          requestAnimationFrame(() => resolve());
+        });
+      });
+      expect(setDataMask).not.toHaveBeenCalled();
+      expect(props.tableOwnState.alertFilter?.selections).toEqual([
+        { column: 'sum__num', colors: ['GREEN', 'RED'] },
+      ]);
+    } finally {
+      window.featureFlags = previousFlags;
+    }
+  },
+);
+
+test('a server clamp of an out-of-range page is synchronized once without losing colors', async () => {
+  const previousFlags = window.featureFlags;
+  window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
+  const setDataMask = jest.fn();
+  try {
+    const props = colorProps(setDataMask, true);
+    props.tableColorMetadata = {
+      ...colorMetadata,
+      catalog: { sum__num: ['GREEN'] },
+      row_offset: 0,
+    };
+    props.tableOwnState = {
+      ...props.tableOwnState,
+      alertFilter: {
+        version: 2,
+        selections: [{ column: 'sum__num', colors: ['GREEN'] }],
+      },
+    };
+    render(
+      <ProviderWrapper>
+        <TableChart {...props} sticky={false} />
+      </ProviderWrapper>,
+    );
+    await waitFor(() =>
+      expect(setDataMask).toHaveBeenLastCalledWith({
+        ownState: expect.objectContaining({
+          currentPage: 0,
+          pageSize: 20,
+          alertFilter: props.tableOwnState?.alertFilter,
+        }),
+      }),
+    );
+    expect(setDataMask).toHaveBeenCalledTimes(1);
   } finally {
     window.featureFlags = previousFlags;
   }

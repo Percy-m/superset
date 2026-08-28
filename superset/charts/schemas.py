@@ -27,6 +27,7 @@ from marshmallow.validate import Length, Range
 from marshmallow_union import Union
 
 from superset.common.chart_data import ChartDataResultFormat, ChartDataResultType
+from superset.common.table_color_schema import TableColorFilterSchema
 from superset.db_engine_specs.base import builtin_time_grains
 from superset.tags.models import TagType
 from superset.utils import pandas_postprocessing, schema as utils
@@ -1040,16 +1041,6 @@ class ChartDataExtrasSchema(Schema):
     )
 
 
-class TableAlertFilterSchema(Schema):
-    """A client reference to a server-owned Table formatting rule."""
-
-    rule_id = fields.UUID(required=True)
-    level = fields.String(
-        required=True,
-        validate=validate.OneOf(choices=("RED", "YELLOW", "GREEN")),
-    )
-
-
 class AnnotationLayerSchema(Schema):
     annotationType = fields.String(  # noqa: N815
         metadata={"description": "Type of annotation layer"},
@@ -1405,12 +1396,11 @@ class ChartDataQueryObjectSchema(Schema):
         metadata={"description": "Should the rowcount of the actual query be returned"},
         allow_none=True,
     )
-    alert_filters = fields.List(
-        fields.Nested(TableAlertFilterSchema),
-        validate=Length(max=50),
-        allow_none=True,
-    )
-    is_table_alert_totals = fields.Boolean(allow_none=True)
+    # Retired fields are accepted only to discard old saved query contexts.
+    # The factory rejects mixing either one with the versioned color request.
+    alert_filters = fields.Raw(allow_none=True, metadata={"deprecated": True})
+    is_table_alert_totals = fields.Raw(allow_none=True, metadata={"deprecated": True})
+    table_color_filter = fields.Nested(TableColorFilterSchema)
     time_offsets = fields.List(
         fields.String(),
         allow_none=True,

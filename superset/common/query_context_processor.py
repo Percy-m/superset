@@ -25,7 +25,7 @@ from flask import current_app
 from flask_babel import gettext as _
 
 from superset import is_feature_enabled
-from superset.common.chart_data import ChartDataResultFormat
+from superset.common.chart_data import ChartDataResultFormat, ChartDataResultType
 from superset.common.db_query_status import QueryStatus
 from superset.common.query_actions import get_query_results
 from superset.common.table_alerts import TableRuleResolver
@@ -362,36 +362,47 @@ class QueryContextProcessor:
     ) -> dict[str, Any]:
         """Returns the query results with both metadata and data"""
 
-        queries_needing_totals, totals_idx = self._prepare_contribution_totals()
-
-        # Skip ensure_totals_available when force_cached=True
-        # This prevents recalculating contribution_totals from cached results
-        if not force_cached:
-            self.ensure_totals_available(queries_needing_totals, totals_idx)
-
-            # Update cache_values to reflect modifications made by
-            # ensure_totals_available()
-            # This ensures cache keys are generated from the actual query state
-            # We merge the original query dict with the updated query dict to preserve
-            # any fields that might not be in to_dict() but were in the original request
-            self._query_context.cache_values["queries"] = [
-                {**cached_query, **query.to_dict()}
-                for cached_query, query in zip(
-                    self._query_context.cache_values["queries"],
-                    self._query_context.queries,
-                    strict=True,
-                )
-            ]
-
-        query_results = [
-            get_query_results(
-                query_obj.result_type or self._query_context.result_type,
-                self._query_context,
-                query_obj,
-                force_cached,
+        if self._query_context.table_color_filter is not None and (
+            self._query_context.result_type
+            in {
+                ChartDataResultType.FULL,
+                ChartDataResultType.RESULTS,
+                ChartDataResultType.POST_PROCESSED,
+            }
+        ):
+            # Resolve a frozen result before the ordinary totals path. A hit must
+            # not execute the base, row-count, contribution or historical SQL.
+            from superset.common.table_color_query import (  # pylint: disable=import-outside-toplevel
+                TableColorQueryProcessor,
             )
-            for query_obj in self._query_context.queries
-        ]
+
+            query_results = TableColorQueryProcessor(self._query_context).run(
+                force_cached=force_cached
+            )
+        else:
+            queries_needing_totals, totals_idx = self._prepare_contribution_totals()
+
+            # Skip contribution queries when only cached results are requested.
+            if not force_cached:
+                self.ensure_totals_available(queries_needing_totals, totals_idx)
+                self._query_context.cache_values["queries"] = [
+                    {**cached_query, **query.to_dict()}
+                    for cached_query, query in zip(
+                        self._query_context.cache_values["queries"],
+                        self._query_context.queries,
+                        strict=True,
+                    )
+                ]
+
+            query_results = [
+                get_query_results(
+                    query_obj.result_type or self._query_context.result_type,
+                    self._query_context,
+                    query_obj,
+                    force_cached,
+                )
+                for query_obj in self._query_context.queries
+            ]
 
         return_value = {"queries": query_results}
 

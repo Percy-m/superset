@@ -36,8 +36,7 @@ const tableChart = {
     conditional_formatting: [
       {
         ruleId: RED_RULE_ID,
-        subjectRef: { kind: 'saved_metric', key: 'gross_revenue' },
-        alertLevel: 'RED',
+        colorScheme: 'colorError',
         filterable: true,
         column: 'gross_revenue',
         operator: '<',
@@ -47,8 +46,7 @@ const tableChart = {
       },
       {
         ruleId: YELLOW_RULE_ID,
-        subjectRef: { kind: 'physical_column', key: 'quantity' },
-        alertLevel: 'YELLOW',
+        colorScheme: 'colorWarning',
         filterable: true,
         column: 'quantity',
         operator: '≤ x <',
@@ -59,6 +57,10 @@ const tableChart = {
       },
     ],
   },
+};
+
+const chartLayout = {
+  'CHART-10': { id: 'CHART-10', type: 'CHART', meta: { chartId: 10 } },
 };
 
 test('sanitizes native, cross, alert, and tab state with a strict whitelist', () => {
@@ -91,11 +93,17 @@ test('sanitizes native, cross, alert, and tab state with a strict whitelist', ()
           pageSize: 200,
           searchText: 'private transient search',
           clientView: { rows: ['must-not-be-shared'] },
-          alertFilters: [
-            { ruleId: RED_RULE_ID.toUpperCase(), level: 'RED' },
-            { ruleId: RED_RULE_ID, level: 'GREEN' },
-            { ruleId: RED_RULE_ID, level: 'RED' },
-          ],
+          alertFilter: {
+            version: 2,
+            selections: [
+              { column: 'gross_revenue', colors: ['RED'] },
+              { column: 'gross_revenue', colors: ['BLUE'] },
+              { column: 'deleted_column', colors: ['RED'] },
+            ],
+            snapshotId: 'must-not-be-shared',
+            generation: 8,
+            form_data_key: 'must-not-be-shared',
+          },
         },
         queryResult: ['must-not-be-shared'],
       },
@@ -167,7 +175,10 @@ test('sanitizes native, cross, alert, and tab state with a strict whitelist', ()
         },
         filterState: { value: ['Online'] },
         ownState: {
-          alertFilters: [{ ruleId: RED_RULE_ID, level: 'RED' }],
+          alertFilter: {
+            version: 2,
+            selections: [{ column: 'gross_revenue', colors: ['RED'] }],
+          },
         },
       },
     },
@@ -180,7 +191,7 @@ test('sanitizes native, cross, alert, and tab state with a strict whitelist', ()
   expect(JSON.stringify(result.state)).not.toContain('must-not-be-shared');
 });
 
-test('drops legacy, Cell Bar, gradient, and stale alert rules', () => {
+test('retains Cell Bar filters but drops effective gradients and legacy rule references', () => {
   const invalidRulesChart = {
     ...tableChart,
     form_data: {
@@ -195,6 +206,7 @@ test('drops legacy, Cell Bar, gradient, and stale alert rules', () => {
         {
           ...tableChart.form_data.conditional_formatting[1],
           ruleId: YELLOW_RULE_ID,
+          objectFormatting: 'BACKGROUND_COLOR',
           useGradient: true,
         },
       ],
@@ -210,6 +222,13 @@ test('drops legacy, Cell Bar, gradient, and stale alert rules', () => {
             { ruleId: RED_RULE_ID, level: 'RED' },
             { ruleId: YELLOW_RULE_ID, level: 'YELLOW' },
           ],
+          alertFilter: {
+            version: 2,
+            selections: [
+              { column: 'gross_revenue', colors: ['RED'] },
+              { column: 'quantity', colors: ['YELLOW'] },
+            ],
+          },
         },
       },
     },
@@ -223,8 +242,18 @@ test('drops legacy, Cell Bar, gradient, and stale alert rules', () => {
     },
   });
 
-  expect(result.state.dataMask).toEqual({});
-  expect(result.dropped.invalidAlertFilters).toBe(2);
+  expect(result.state.dataMask).toEqual({
+    10: {
+      id: '10',
+      ownState: {
+        alertFilter: {
+          version: 2,
+          selections: [{ column: 'gross_revenue', colors: ['RED'] }],
+        },
+      },
+    },
+  });
+  expect(result.dropped.invalidAlertFilters).toBe(3);
 });
 
 test('drops cross-filter state from a source outside effective chart configuration', () => {
@@ -266,7 +295,10 @@ test('keeps alert state but drops cross filters when dashboard cross filters are
         },
         filterState: { value: ['APAC'] },
         ownState: {
-          alertFilters: [{ ruleId: RED_RULE_ID, level: 'RED' }],
+          alertFilter: {
+            version: 2,
+            selections: [{ column: 'gross_revenue', colors: ['RED'] }],
+          },
         },
       },
     },
@@ -286,7 +318,10 @@ test('keeps alert state but drops cross filters when dashboard cross filters are
     10: {
       id: '10',
       ownState: {
-        alertFilters: [{ ruleId: RED_RULE_ID, level: 'RED' }],
+        alertFilter: {
+          version: 2,
+          selections: [{ column: 'gross_revenue', colors: ['RED'] }],
+        },
       },
     },
   });
@@ -311,4 +346,250 @@ test('diagnostic logging includes only phase and counters', () => {
   });
   expect(JSON.stringify(infoSpy.mock.calls)).not.toContain('APAC');
   infoSpy.mockRestore();
+});
+
+test('shares all three colors independently of enabling rule palette and deduplicates by column', () => {
+  const result = sanitizeShareableDashboardState({
+    charts: [tableChart],
+    layout: chartLayout,
+    dataMask: {
+      10: {
+        ownState: {
+          alertFilter: {
+            version: 2,
+            snapshotId: 'private-snapshot',
+            generation: 7,
+            selections: [
+              {
+                column: 'gross_revenue',
+                colors: ['RED', 'GREEN'],
+                ruleId: 'discard',
+              },
+              { column: 'gross_revenue', colors: ['YELLOW', 'RED'] },
+              { column: 'quantity', colors: ['YELLOW'] },
+            ],
+          },
+        },
+      },
+    },
+  });
+
+  expect(result.state.dataMask[10].ownState).toEqual({
+    alertFilter: {
+      version: 2,
+      selections: [
+        { column: 'gross_revenue', colors: ['GREEN', 'YELLOW', 'RED'] },
+        { column: 'quantity', colors: ['YELLOW'] },
+      ],
+    },
+  });
+  expect(result.dropped.transientChartFields).toBe(3);
+  expect(JSON.stringify(result.state)).not.toContain('private-snapshot');
+});
+
+test.each([
+  undefined,
+  null,
+  [],
+  { version: 1, selections: [{ column: 'gross_revenue', colors: ['RED'] }] },
+  { version: 2, selections: null },
+  { version: 2, selections: [] },
+  { version: 2, selections: [{ column: 'gross_revenue', colors: [] }] },
+  { version: 2, selections: [{ column: 'gross_revenue', colors: ['red'] }] },
+  {
+    version: 2,
+    selections: [{ column: 'gross_revenue', colors: ['RED', '#ff0000'] }],
+  },
+])('does not share malformed or empty color state: %j', alertFilter => {
+  const result = sanitizeShareableDashboardState({
+    charts: [tableChart],
+    layout: chartLayout,
+    dataMask: { 10: { ownState: { alertFilter } } },
+  });
+  expect(result.state.dataMask).toEqual({});
+});
+
+test('does not share disabled, hidden, removed-source, or foreign-chart targets', () => {
+  const makeChart = (formData: Record<string, unknown>) => ({
+    slice_id: 10,
+    form_data: { ...tableChart.form_data, ...formData },
+  });
+  const cases = [
+    makeChart({ viz_type: 'pivot_table_v2' }),
+    makeChart({ column_config: { gross_revenue: { visible: false } } }),
+    makeChart({
+      conditional_formatting: [
+        {
+          ...tableChart.form_data.conditional_formatting[0],
+          filterable: false,
+        },
+      ],
+    }),
+    makeChart({
+      conditional_formatting: [
+        {
+          ...tableChart.form_data.conditional_formatting[0],
+          column: 'deleted',
+          columnFormatting: 'gross_revenue',
+        },
+      ],
+    }),
+  ];
+  cases.forEach(chart => {
+    const result = sanitizeShareableDashboardState({
+      charts: [chart],
+      layout: chartLayout,
+      dataMask: {
+        10: {
+          ownState: {
+            alertFilter: {
+              version: 2,
+              selections: [{ column: 'gross_revenue', colors: ['RED'] }],
+            },
+          },
+        },
+      },
+    });
+    expect(result.state.dataMask).toEqual({});
+    expect(result.dropped.invalidAlertFilters).toBe(1);
+  });
+});
+
+test('shares raw string, adhoc, percent and comparison targets without subject references', () => {
+  const examples = [
+    {
+      formData: { query_mode: 'raw', all_columns: ['status'] },
+      column: 'status',
+    },
+    {
+      formData: {
+        metrics: [{ label: 'SUM(amount)', sqlExpression: 'SUM(amount)' }],
+      },
+      column: 'SUM(amount)',
+    },
+    { formData: { percent_metrics: ['amount'] }, column: '%amount' },
+    {
+      formData: { metrics: ['amount'], time_compare: ['1 year ago'] },
+      column: '△ amount',
+    },
+  ];
+  examples.forEach(({ formData, column }) => {
+    const result = sanitizeShareableDashboardState({
+      charts: [
+        {
+          slice_id: 10,
+          form_data: {
+            viz_type: 'table',
+            ...formData,
+            conditional_formatting: [
+              {
+                column,
+                colorScheme: 'colorSuccess',
+                operator: 'None',
+                useGradient: false,
+                filterable: true,
+              },
+            ],
+          },
+        },
+      ],
+      layout: chartLayout,
+      dataMask: {
+        10: {
+          ownState: {
+            alertFilter: {
+              version: 2,
+              selections: [{ column, colors: ['GREEN'] }],
+            },
+          },
+        },
+      },
+    });
+    expect(result.state.dataMask[10].ownState).toEqual({
+      alertFilter: { version: 2, selections: [{ column, colors: ['GREEN'] }] },
+    });
+  });
+});
+
+test('a hidden numeric source gradient disables another enabled visible target', () => {
+  const result = sanitizeShareableDashboardState({
+    charts: [
+      {
+        ...tableChart,
+        form_data: {
+          ...tableChart.form_data,
+          column_config: { quantity: { visible: false } },
+          conditional_formatting: [
+            tableChart.form_data.conditional_formatting[0],
+            {
+              ...tableChart.form_data.conditional_formatting[1],
+              columnFormatting: 'gross_revenue',
+              objectFormatting: 'BACKGROUND_COLOR',
+              useGradient: true,
+              filterable: false,
+            },
+          ],
+        },
+      },
+    ],
+    layout: chartLayout,
+    dataMask: {
+      10: {
+        ownState: {
+          alertFilter: {
+            version: 2,
+            selections: [{ column: 'gross_revenue', colors: ['RED'] }],
+          },
+        },
+      },
+    },
+  });
+  expect(result.state.dataMask).toEqual({});
+  expect(result.dropped.invalidAlertFilters).toBe(1);
+});
+
+test('limits shared colors to 100 enabled targets without retaining runtime state', () => {
+  const columns = Array.from({ length: 101 }, (_, index) => `column_${index}`);
+  const result = sanitizeShareableDashboardState({
+    charts: [
+      {
+        slice_id: 10,
+        form_data: {
+          viz_type: 'table',
+          query_mode: 'raw',
+          all_columns: columns,
+          conditional_formatting: [
+            {
+              column: columns[0],
+              columnFormatting: 'ENTIRE_ROW',
+              operator: 'None',
+              colorScheme: 'colorSuccess',
+              useGradient: false,
+              filterable: true,
+            },
+          ],
+        },
+      },
+    ],
+    layout: chartLayout,
+    dataMask: {
+      10: {
+        ownState: {
+          alertFilter: {
+            version: 2,
+            selections: columns.map(column => ({ column, colors: ['GREEN'] })),
+          },
+        },
+      },
+    },
+  });
+  expect(result.state.dataMask[10].ownState).toEqual({
+    alertFilter: {
+      version: 2,
+      selections: columns
+        .slice(0, 100)
+        .map(column => ({ column, colors: ['GREEN'] })),
+    },
+  });
+  expect(result.dropped.invalidAlertFilters).toBe(1);
 });

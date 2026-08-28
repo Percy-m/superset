@@ -83,6 +83,7 @@ from superset.commands.database.exceptions import DatasetValidationError
 from superset.commands.exceptions import TagForbiddenError
 from superset.commands.importers.exceptions import NoValidFilesFoundError
 from superset.commands.importers.v1.utils import get_contents_from_bundle
+from superset.common.table_color_schema import TableColorFilterError
 from superset.constants import MODEL_API_RW_METHOD_PERMISSION_MAP, RouteMethod
 from superset.daos.dashboard import DashboardDAO, EmbeddedDashboardDAO
 from superset.dashboards.filters import (
@@ -1273,7 +1274,10 @@ class DashboardRestApi(CustomTagsOptimizationMixin, BaseSupersetModelRestApi):
                 dashboard,
                 payload["tabIds"],
                 payload["dataMask"],
+                payload["colorSnapshots"],
             ).run()
+        except TableColorFilterError as ex:
+            return self.response(ex.status, message=ex.message, error_code=ex.code)
         except DashboardXlsxInvalidTabError as ex:
             return self.response_400(message=str(ex))
         except (

@@ -26,10 +26,23 @@ import {
   waitFor,
 } from 'spec/helpers/testing-library';
 import { Menu, MenuItem } from '@superset-ui/core/components/Menu';
-import { FeatureFlag, SupersetClient } from '@superset-ui/core';
+import {
+  DataMaskStateWithId,
+  FeatureFlag,
+  SupersetClient,
+  TableColorSelection,
+} from '@superset-ui/core';
+import { DashboardLayout } from 'src/dashboard/types';
 import { DASHBOARD_ROOT_ID } from 'src/dashboard/util/constants';
-import { TAB_TYPE, TABS_TYPE } from 'src/dashboard/util/componentTypes';
-import { DashboardTabXlsxExport } from './DashboardTabXlsxExport';
+import {
+  CHART_TYPE,
+  TAB_TYPE,
+  TABS_TYPE,
+} from 'src/dashboard/util/componentTypes';
+import {
+  DashboardTabXlsxExport,
+  getDashboardColorExportState,
+} from './DashboardTabXlsxExport';
 import { useDownloadMenuItems } from '.';
 
 const mockAddSuccessToast = jest.fn();
@@ -73,6 +86,221 @@ const MenuWrapper = () => {
 
 const originalCreateObjectURL = window.URL.createObjectURL;
 const originalRevokeObjectURL = window.URL.revokeObjectURL;
+
+const colorLayout: DashboardLayout = {
+  'TAB-a': {
+    id: 'TAB-a',
+    type: TAB_TYPE,
+    meta: {},
+    children: ['CHART-3', 'TAB-child'],
+  },
+  'TAB-child': {
+    id: 'TAB-child',
+    type: TAB_TYPE,
+    meta: {},
+    children: ['CHART-3'],
+  },
+  'CHART-3': {
+    id: 'CHART-3',
+    type: CHART_TYPE,
+    meta: { chartId: 3 },
+    children: [],
+  },
+  'CHART-4': {
+    id: 'CHART-4',
+    type: CHART_TYPE,
+    meta: { chartId: 4 },
+    children: [],
+  },
+};
+const colorMask: DataMaskStateWithId = {
+  3: {
+    id: '3',
+    ownState: {
+      alertFilter: {
+        version: 2,
+        selections: [{ column: 'profit', colors: ['GREEN'] }],
+        snapshotId: 'snapshot-3',
+        generation: 'generation-3',
+      },
+    },
+  },
+};
+const colorCharts = {
+  3: {
+    queriesResponse: [
+      {
+        table_color_metadata: {
+          status: 'ready',
+          snapshot_id: 'snapshot-3',
+          generation: 'generation-3',
+          theme_mode: 'dark',
+          selections: [{ column: 'profit', colors: ['GREEN'] }],
+        },
+      },
+    ],
+  },
+  4: {
+    queriesResponse: [
+      {
+        table_color_metadata: {
+          status: 'ready',
+          snapshot_id: 'snapshot-4',
+          generation: 'generation-4',
+        },
+      },
+    ],
+  },
+};
+
+test('Tab export sends selected snapshots separately and does not mutate the data mask', () => {
+  window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
+  const exported = getDashboardColorExportState(
+    colorLayout,
+    ['TAB-a', 'TAB-child'],
+    colorMask,
+    colorCharts,
+  );
+  expect(exported.colorSnapshots).toEqual({
+    3: {
+      snapshot_id: 'snapshot-3',
+      generation: 'generation-3',
+      theme_mode: 'dark',
+    },
+  });
+  expect(exported.dataMask[3].ownState?.alertFilter).toEqual({
+    version: 2,
+    selections: [{ column: 'profit', colors: ['GREEN'] }],
+  });
+  expect(colorMask[3].ownState?.alertFilter.snapshotId).toBe('snapshot-3');
+  expect(JSON.stringify(exported.dataMask)).not.toContain('snapshot-3');
+});
+
+test('Tab export refuses an uncompleted or unprepared color selection', () => {
+  window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
+  expect(() =>
+    getDashboardColorExportState(colorLayout, ['TAB-a'], colorMask, {}),
+  ).toThrow('Load the selected color-filtered table');
+  const pendingMask = {
+    3: {
+      id: '3',
+      ownState: {
+        alertFilter: {
+          version: 2,
+          selections: [{ column: 'profit', colors: ['RED'] }],
+        },
+      },
+    },
+  };
+  expect(() =>
+    getDashboardColorExportState(
+      colorLayout,
+      ['TAB-a'],
+      pendingMask,
+      colorCharts,
+    ),
+  ).toThrow('Load the selected color-filtered table');
+});
+
+test.each<{
+  name: string;
+  selections: TableColorSelection[];
+  accepted: boolean;
+}>([
+  {
+    name: 'reversed columns',
+    selections: [
+      { column: 'gross_profit', colors: ['GREEN', 'YELLOW'] },
+      { column: 'error_count', colors: ['RED'] },
+    ],
+    accepted: true,
+  },
+  {
+    name: 'reversed colors',
+    selections: [
+      { column: 'error_count', colors: ['RED'] },
+      { column: 'gross_profit', colors: ['YELLOW', 'GREEN'] },
+    ],
+    accepted: true,
+  },
+  {
+    name: 'reversed columns and colors',
+    selections: [
+      { column: 'gross_profit', colors: ['YELLOW', 'GREEN'] },
+      { column: 'error_count', colors: ['RED'] },
+    ],
+    accepted: true,
+  },
+  {
+    name: 'a different color',
+    selections: [
+      { column: 'gross_profit', colors: ['GREEN', 'RED'] },
+      { column: 'error_count', colors: ['RED'] },
+    ],
+    accepted: false,
+  },
+  {
+    name: 'a missing column',
+    selections: [{ column: 'gross_profit', colors: ['GREEN', 'YELLOW'] }],
+    accepted: false,
+  },
+  { name: 'a pending clear', selections: [], accepted: false },
+])('Tab export handles $name', ({ selections, accepted }) => {
+  window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
+  const mask: DataMaskStateWithId = {
+    3: {
+      ...colorMask[3],
+      ownState: { alertFilter: { version: 2, selections } },
+    },
+  };
+  const charts = {
+    3: {
+      queriesResponse: [
+        {
+          table_color_metadata: {
+            ...colorCharts[3].queriesResponse[0].table_color_metadata,
+            selections: [
+              { column: 'error_count', colors: ['RED'] },
+              { column: 'gross_profit', colors: ['GREEN', 'YELLOW'] },
+            ],
+          },
+        },
+      ],
+    },
+  };
+  const getState = () =>
+    getDashboardColorExportState(colorLayout, ['TAB-a'], mask, charts);
+  if (accepted) {
+    expect(getState().colorSnapshots?.[3].snapshot_id).toBe('snapshot-3');
+    expect(getState().dataMask[3].ownState?.alertFilter.selections).toEqual(
+      selections,
+    );
+  } else {
+    expect(getState).toThrow('Load the selected color-filtered table');
+  }
+});
+
+test.each<DataMaskStateWithId>([{ 3: { id: '3', ownState: {} } }, {}])(
+  'Tab export rejects a removed filter while its response still contains colors: %j',
+  mask => {
+    window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
+    expect(() =>
+      getDashboardColorExportState(colorLayout, ['TAB-a'], mask, colorCharts),
+    ).toThrow('Load the selected color-filtered table');
+  },
+);
+
+test('Tab export with the flag off has no new snapshot parameters', () => {
+  window.featureFlags = {};
+  expect(
+    getDashboardColorExportState(
+      colorLayout,
+      ['TAB-a'],
+      colorMask,
+      colorCharts,
+    ),
+  ).toEqual({ dataMask: colorMask });
+});
 
 beforeEach(() => {
   jest.clearAllMocks();

@@ -17,7 +17,12 @@
  * under the License.
  */
 import { forwardRef, RefObject } from 'react';
-import { QueryData } from '@superset-ui/core';
+import {
+  FeatureFlag,
+  isFeatureEnabled,
+  QueryData,
+  TableColorMetadata,
+} from '@superset-ui/core';
 import { css, SupersetTheme } from '@apache-superset/core/theme';
 import {
   CachedLabel,
@@ -73,15 +78,25 @@ export const ChartPills = forwardRef(
     const countFromSecondQuery = hasCountQuery
       ? queriesResponse[1]?.data?.[0]?.rowcount
       : null;
+    const colorMetadata = firstQueryResponse?.table_color_metadata as
+      | TableColorMetadata
+      | undefined;
+    const filteredRowCount =
+      isTableChart &&
+      isFeatureEnabled(FeatureFlag.TableAlertFilters) &&
+      colorMetadata?.status === 'ready'
+        ? colorMetadata.filtered_rowcount
+        : undefined;
 
     const actualRowCount =
-      isTableChart && countFromSecondQuery != null
+      filteredRowCount ??
+      (isTableChart && countFromSecondQuery != null
         ? countFromSecondQuery
         : Number(
             firstQueryResponse?.sql_rowcount ??
               firstQueryResponse?.rowcount ??
               0,
-          );
+          ));
 
     return (
       <div ref={ref}>

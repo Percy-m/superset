@@ -23,6 +23,7 @@ import {
   VizType,
   JsonObject,
   FeatureFlagMap,
+  FeatureFlag,
 } from '@superset-ui/core';
 import ChartRenderer, {
   ChartRendererProps,
@@ -46,6 +47,7 @@ jest.mock('@superset-ui/core', () => ({
     <div
       data-test="mock-super-chart"
       data-is-refreshing={isRefreshing ? 'true' : 'false'}
+      data-enable-no-results={String(props.enableNoResults)}
     >
       {JSON.stringify(postTransformProps(props).formData)}
     </div>
@@ -118,6 +120,36 @@ test('should render SuperChart', () => {
   );
   expect(getByTestId('mock-super-chart')).toBeInTheDocument();
 });
+
+test.each([false, true])(
+  'an empty color result keeps the header and clear action, server pagination %s',
+  serverPagination => {
+    const previousFlags = window.featureFlags;
+    window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
+    try {
+      const { getByTestId } = render(
+        <ChartRenderer
+          {...(requiredProps as ChartRendererProps)}
+          formData={{
+            datasource: '1__table',
+            viz_type: 'table',
+            server_pagination: serverPagination,
+          }}
+          chartStatus="success"
+          queriesResponse={[
+            { data: [], table_color_metadata: { status: 'ready' } },
+          ]}
+        />,
+      );
+      expect(getByTestId('mock-super-chart')).toHaveAttribute(
+        'data-enable-no-results',
+        'false',
+      );
+    } finally {
+      window.featureFlags = previousFlags;
+    }
+  },
+);
 
 test('should use latestQueryFormData instead of formData when chartIsStale is true', () => {
   const { getByTestId } = render(

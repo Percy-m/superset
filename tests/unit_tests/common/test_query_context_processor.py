@@ -750,7 +750,7 @@ def test_ensure_totals_available_updates_cache_values():
     )
 
     # Create mock query context
-    mock_query_context = MagicMock()
+    mock_query_context = MagicMock(table_color_filter=None)
     mock_query_context.force = False
     mock_query_context.datasource = mock_datasource
     mock_query_context.queries = [main_query, totals_query]
@@ -870,7 +870,7 @@ def test_get_df_payload_validates_before_cache_key_generation():
     from superset.common.query_object import QueryObject
 
     # Create a mock query context
-    mock_query_context = MagicMock()
+    mock_query_context = MagicMock(table_color_filter=None)
     mock_query_context.force = False
     mock_query_context.result_type = "full"
 
@@ -979,7 +979,7 @@ def test_cache_values_sync_after_ensure_totals_available():
     )
 
     # Create mock query context with initial cache_values
-    mock_query_context = MagicMock()
+    mock_query_context = MagicMock(table_color_filter=None)
     mock_query_context.force = False
     mock_query_context.datasource = mock_datasource
     mock_query_context.queries = [main_query, totals_query]
@@ -1263,7 +1263,7 @@ def test_force_cached_normalizes_totals_query_row_limit():
     totals_query.cache_key = totals_cache_key
     main_query.cache_key = lambda **kwargs: "main-cache-key"
 
-    mock_query_context = MagicMock()
+    mock_query_context = MagicMock(table_color_filter=None)
     mock_query_context.force = False
     mock_query_context.datasource = mock_datasource
     mock_query_context.queries = [main_query, totals_query]
@@ -1324,7 +1324,7 @@ def test_get_df_payload_invalidates_cache_missing_applied_filter_columns():
     from superset.common.query_object import QueryObject
 
     # Minimal setup
-    mock_query_context = MagicMock()
+    mock_query_context = MagicMock(table_color_filter=None)
     mock_query_context.force = False
     mock_datasource = MagicMock()
     mock_datasource.column_names = ["col1"]

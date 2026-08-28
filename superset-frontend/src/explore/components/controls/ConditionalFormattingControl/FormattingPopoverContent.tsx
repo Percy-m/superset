@@ -20,6 +20,7 @@ import { useMemo, useState, useEffect, useCallback } from 'react';
 import { t } from '@apache-superset/core/translation';
 import { styled } from '@apache-superset/core/theme';
 import { GenericDataType } from '@apache-superset/core/common';
+import { Alert } from '@apache-superset/core/components';
 import { FeatureFlag, isFeatureEnabled } from '@superset-ui/core';
 import { v4 as uuidv4 } from 'uuid';
 import {
@@ -41,6 +42,10 @@ import {
   type FormProps,
 } from '@superset-ui/core/components';
 import { ConditionalFormattingConfig, ColumnOption } from './types';
+import {
+  hasEffectiveBackgroundGradient,
+  normalizeConditionalFormattingConfig,
+} from './normalizeConditionalFormatting';
 import {
   operatorOptions,
   stringOperatorOptions,
@@ -68,7 +73,7 @@ const targetValueValidator =
     rejectMessage: string,
   ) =>
   (targetValue: number | string) =>
-  (_: any, compareValue: number | string) => {
+  (_: unknown, compareValue: number | string) => {
     if (
       !targetValue ||
       !compareValue ||
@@ -96,40 +101,6 @@ const isOperatorNone = (operator?: Comparator) =>
   !operator || operator === Comparator.None;
 
 const rulesRequired = [{ required: true, message: t('Required') }];
-
-const alertFilterComparators = new Set<Comparator>([
-  Comparator.GreaterThan,
-  Comparator.LessThan,
-  Comparator.GreaterOrEqual,
-  Comparator.LessOrEqual,
-  Comparator.Equal,
-  Comparator.NotEqual,
-  ...MultipleValueComparators,
-]);
-
-const isFiniteTarget = (value: unknown) =>
-  typeof value === 'number' && Number.isFinite(value);
-
-const canFilterAlert = (
-  values: ConditionalFormattingConfig,
-  option?: ColumnOption,
-) => {
-  const hasValidTargets = isOperatorMultiValue(values.operator)
-    ? isFiniteTarget(values.targetValueLeft) &&
-      isFiniteTarget(values.targetValueRight) &&
-      Number(values.targetValueLeft) < Number(values.targetValueRight)
-    : isFiniteTarget(values.targetValue);
-
-  return Boolean(
-    option?.subjectRef &&
-    option.dataType === GenericDataType.Numeric &&
-    values.operator &&
-    alertFilterComparators.has(values.operator) &&
-    hasValidTargets &&
-    values.useGradient !== true &&
-    values.objectFormatting !== ObjectFormattingEnum.CELL_BAR,
-  );
-};
 
 type GetFieldValue = Pick<Required<FormProps>['form'], 'getFieldValue'>;
 const rulesTargetValueLeft = [
@@ -268,12 +239,14 @@ export const FormattingPopoverContent = ({
   columns = [],
   extraColorChoices = [],
   allColumns = [],
+  supportsAlertFilter = false,
 }: {
   config?: ConditionalFormattingConfig;
   onChange: (config: ConditionalFormattingConfig) => void;
   columns: ColumnOption[];
   extraColorChoices?: { label: string; value: string }[];
   allColumns?: ColumnOption[];
+  supportsAlertFilter?: boolean;
 }) => {
   const [form] = Form.useForm();
   const colorScheme = colorSchemeOptions();
@@ -287,7 +260,11 @@ export const FormattingPopoverContent = ({
     config?.useGradient !== undefined ? config.useGradient : true,
   );
 
-  const handleChange = (event: any) => {
+  const [selectedColorScheme, setSelectedColorScheme] = useState(
+    config?.colorScheme ?? colorScheme[0].value,
+  );
+  const handleChange = (event: string) => {
+    setSelectedColorScheme(event);
     setShowOperatorFields(
       !(event === ColorSchemeEnum.Green || event === ColorSchemeEnum.Red),
     );
@@ -321,28 +298,41 @@ export const FormattingPopoverContent = ({
     () => columns.find(item => item.value === column)?.dataType,
     [columns, column],
   );
-  const alertFiltersEnabled = isFeatureEnabled(FeatureFlag.TableAlertFilters);
-  const selectedColumnOption = useMemo(
-    () => columns.find(item => item.value === column),
-    [column, columns],
+  const alertFiltersEnabled =
+    supportsAlertFilter && isFeatureEnabled(FeatureFlag.TableAlertFilters);
+  const effectiveGradient = hasEffectiveBackgroundGradient(
+    {
+      ...config,
+      colorScheme: selectedColorScheme,
+      objectFormatting,
+      useGradient,
+    },
+    columnType,
+  );
+  const [gradientClosesFilter, setGradientClosesFilter] = useState(
+    Boolean(config?.filterable),
   );
 
+  useEffect(() => {
+    if (alertFiltersEnabled && effectiveGradient) {
+      if (form.getFieldValue('filterable')) setGradientClosesFilter(true);
+      form.setFieldsValue({ filterable: false });
+    }
+  }, [alertFiltersEnabled, effectiveGradient, form]);
+
   const handleSubmit = (values: ConditionalFormattingConfig) => {
-    const submittedValues = { ...config, ...values };
+    const submittedValues = normalizeConditionalFormattingConfig({
+      ...config,
+      ...values,
+    });
     if (!alertFiltersEnabled) {
       onChange(submittedValues);
       return;
     }
-    const filterable = Boolean(
-      submittedValues.filterable &&
-      canFilterAlert(submittedValues, selectedColumnOption),
-    );
     onChange({
       ...submittedValues,
       ruleId: config?.ruleId ?? uuidv4(),
-      filterable,
-      subjectRef: selectedColumnOption?.subjectRef,
-      alertLevel: filterable ? submittedValues.alertLevel : undefined,
+      filterable: Boolean(submittedValues.filterable && !effectiveGradient),
     });
   };
 
@@ -458,7 +448,7 @@ export const FormattingPopoverContent = ({
             initialValue={colorScheme[0].value}
           >
             <Select
-              onChange={event => handleChange(event)}
+              onChange={event => handleChange(String(event))}
               ariaLabel={t('Color scheme')}
               options={[...colorScheme, ...extraColorChoices]}
             />
@@ -538,37 +528,38 @@ export const FormattingPopoverContent = ({
           </Row>
         )}
       </FormItem>
-      {alertFiltersEnabled && selectedColumnOption?.subjectRef ? (
+      {alertFiltersEnabled ? (
         <Row gutter={12}>
-          <Col span={12}>
+          <Col span={24}>
             <FormItem
               name="filterable"
               valuePropName="checked"
-              initialValue={config?.filterable ?? false}
+              initialValue={!effectiveGradient && (config?.filterable ?? false)}
             >
-              <Checkbox>{t('Enable alert filter')}</Checkbox>
+              <Checkbox disabled={effectiveGradient}>
+                {t('Enable alert filter')}
+              </Checkbox>
             </FormItem>
-          </Col>
-          <Col span={12}>
-            <FormItem
-              name="alertLevel"
-              label={t('Alert level')}
-              rules={[
-                ({ getFieldValue }: GetFieldValue) => ({
-                  required: Boolean(getFieldValue('filterable')),
-                  message: t('Required'),
-                }),
-              ]}
-            >
-              <Select
-                ariaLabel={t('Alert level')}
-                options={[
-                  { value: 'RED', label: t('Red') },
-                  { value: 'YELLOW', label: t('Yellow') },
-                  { value: 'GREEN', label: t('Green') },
-                ]}
-              />
-            </FormItem>
+            {effectiveGradient && (
+              <FormItem>
+                <Alert
+                  type="warning"
+                  showIcon
+                  message={t(
+                    'Gradient formatting does not support color filtering. Disable Use gradient to enable the alert filter.',
+                  )}
+                  description={
+                    gradientClosesFilter
+                      ? t(
+                          'Applying this change will disable this rule’s color filter. Gradient formatting will still be saved.',
+                        )
+                      : t(
+                          'You can still apply and save the gradient formatting.',
+                        )
+                  }
+                />
+              </FormItem>
+            )}
           </Col>
         </Row>
       ) : null}

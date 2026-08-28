@@ -36,6 +36,8 @@ import {
   JsonObject,
   MatrixifyFormData,
   DatasourceType,
+  FeatureFlag,
+  isFeatureEnabled,
 } from '@superset-ui/core';
 import {
   ControlStateMapping,
@@ -729,8 +731,17 @@ function ExploreViewContainer(props: ExploreViewContainerProps) {
 
   const previousOwnState = usePrevious(props.ownState);
   useEffect(() => {
-    const strip = (s: JsonObject | undefined) =>
-      s && typeof s === 'object' ? omit(s, ['clientView']) : s;
+    const isColorTable =
+      props.vizType === 'table' &&
+      isFeatureEnabled(FeatureFlag.TableAlertFilters);
+    const strip = (state: JsonObject | undefined) => {
+      const queryState =
+        state && typeof state === 'object'
+          ? omit(state, ['clientView'])
+          : state;
+      // Creating the first export projection does not create a query filter.
+      return isColorTable ? (queryState ?? {}) : queryState;
+    };
     if (!isEqual(strip(previousOwnState), strip(props.ownState))) {
       onQuery();
       reRenderChart();

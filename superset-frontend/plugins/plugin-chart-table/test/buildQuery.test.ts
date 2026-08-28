@@ -287,81 +287,116 @@ describe('plugin-chart-table', () => {
   });
 });
 
-test('alert selections are attached to data and qualified totals queries', () => {
+const colorFormData: TableChartFormData = {
+  ...basicFormData,
+  slice_id: 42,
+  query_mode: QueryMode.Aggregate,
+  groupby: ['category'],
+  metrics: ['gross_revenue'],
+  show_totals: true,
+  conditional_formatting: [
+    {
+      column: 'gross_revenue',
+      colorScheme: 'colorSuccess',
+      filterable: true,
+      operator: '>',
+      targetValue: 10,
+      useGradient: false,
+    },
+    {
+      column: 'category',
+      colorScheme: 'colorSuccess',
+      filterable: true,
+      operator: '=',
+      targetValue: 'A',
+    },
+  ],
+};
+
+test.each([false, true])(
+  'only the main query carries color filtering, server pagination %s',
+  serverPagination => {
+    const previousFlags = window.featureFlags;
+    window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
+    const setDataMask = jest.fn();
+    try {
+      const { queries } = buildQuery(
+        {
+          ...colorFormData,
+          server_pagination: serverPagination,
+          server_page_length: 20,
+        },
+        {
+          ownState: {
+            currentPage: 2,
+            pageSize: 20,
+            alertFilter: {
+              version: 2,
+              snapshotId: 'snapshot-1',
+              selections: [
+                { column: 'gross_revenue', colors: ['GREEN', 'YELLOW', 'RED'] },
+                { column: 'category', colors: ['GREEN'] },
+              ],
+            },
+          },
+          hooks: { setDataMask, setCachedChanges: jest.fn() },
+        },
+      );
+      expect(queries[0].table_color_filter).toEqual({
+        version: 2,
+        snapshot_id: 'snapshot-1',
+        selections: [
+          { column: 'gross_revenue', colors: ['GREEN', 'YELLOW', 'RED'] },
+          { column: 'category', colors: ['GREEN'] },
+        ],
+      });
+      queries
+        .slice(1)
+        .forEach(query => expect(query.table_color_filter).toBeUndefined());
+      queries.forEach(query => {
+        expect(query.alert_filters).toBeUndefined();
+        expect(query.is_table_alert_totals).toBeUndefined();
+      });
+      expect(setDataMask).not.toHaveBeenCalled();
+    } finally {
+      window.featureFlags = previousFlags;
+    }
+  },
+);
+
+test('enabled rules prepare a baseline snapshot before any selection', () => {
   const previousFlags = window.featureFlags;
   window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
   try {
-    const { queries } = buildQuery(
-      {
-        ...basicFormData,
-        slice_id: 42,
-        query_mode: QueryMode.Aggregate,
-        groupby: ['category'],
-        metrics: ['gross_revenue'],
-        show_totals: true,
-      },
-      {
-        ownState: {
-          alertFilters: [
-            {
-              ruleId: '772a548e-72f7-4ac8-a8ff-fdb7465b3ccd',
-              level: 'RED',
-            },
-            {
-              ruleId: '772a548e-72f7-4ac8-a8ff-fdb7465b3ccd',
-              level: 'RED',
-            },
-          ],
-        },
-      },
-    );
-
-    expect(queries).toHaveLength(2);
-    expect(queries[0].alert_filters).toEqual([
-      {
-        rule_id: '772a548e-72f7-4ac8-a8ff-fdb7465b3ccd',
-        level: 'RED',
-      },
-    ]);
-    expect(queries[1]).toEqual(
-      expect.objectContaining({
-        alert_filters: queries[0].alert_filters,
-        columns: ['category'],
-        is_table_alert_totals: true,
-        row_limit: 0,
-        row_offset: 0,
-      }),
-    );
+    expect(buildQuery(colorFormData).queries[0].table_color_filter).toEqual({
+      version: 2,
+      selections: [],
+    });
+    expect(
+      buildQuery({ ...colorFormData, conditional_formatting: [] }).queries[0]
+        .table_color_filter,
+    ).toBeUndefined();
+    expect(
+      buildQuery({ ...colorFormData, result_type: 'query' }).queries[0]
+        .table_color_filter,
+    ).toBeUndefined();
   } finally {
     window.featureFlags = previousFlags;
   }
 });
 
-test('alert selections are omitted when the feature flag is disabled', () => {
+test('flag-off and old rule-level state never send legacy alert filters', () => {
   const previousFlags = window.featureFlags;
   window.featureFlags = { [FeatureFlag.TableAlertFilters]: false };
   try {
-    const { queries } = buildQuery(
-      {
-        ...basicFormData,
-        slice_id: 42,
-        query_mode: QueryMode.Aggregate,
-        groupby: ['category'],
-        metrics: ['gross_revenue'],
-      },
-      {
-        ownState: {
-          alertFilters: [
-            {
-              ruleId: '772a548e-72f7-4ac8-a8ff-fdb7465b3ccd',
-              level: 'RED',
-            },
-          ],
-        },
-      },
-    );
-
-    expect(queries[0].alert_filters).toBeUndefined();
+    const { queries } = buildQuery(colorFormData, {
+      ownState: { alertFilters: [{ ruleId: 'old-rule', level: 'RED' }] },
+    });
+    queries.forEach(query => {
+      expect(query.table_color_filter).toBeUndefined();
+      expect(query.alert_filters).toBeUndefined();
+      expect(query.is_table_alert_totals).toBeUndefined();
+    });
   } finally {
     window.featureFlags = previousFlags;
   }

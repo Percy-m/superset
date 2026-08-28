@@ -66,13 +66,6 @@ from sqlalchemy_utils import UUIDType
 from superset import db, is_feature_enabled
 from superset.advanced_data_type.types import AdvancedDataTypeResponse
 from superset.common.db_query_status import QueryStatus
-from superset.common.table_alerts import (
-    ALERT_FILTERS_EXTRA_KEY,
-    ALERT_TOTALS_EXTRA_KEY,
-    build_alert_group_clause,
-    INVALID_ALERT_RULE_MESSAGE,
-    ResolvedAlertGroup,
-)
 from superset.common.utils import dataframe_utils
 from superset.common.utils.time_range_utils import (
     get_since_until_from_query_object,
@@ -1366,6 +1359,7 @@ class ExploreMixin:  # pylint: disable=too-many-public-methods
         cache_key_fn: Callable[[QueryObject, str, Any], str | None] | None = None,
         cache_timeout_fn: Callable[[], int] | None = None,
         force_cache: bool = False,
+        local_offset_cache: dict[str, tuple[pd.DataFrame, str]] | None = None,
     ) -> CachedTimeOffset:
         """
         Process time offsets for time comparison feature.
@@ -1378,6 +1372,7 @@ class ExploreMixin:  # pylint: disable=too-many-public-methods
         :param cache_key_fn: Optional function to generate cache keys
         :param cache_timeout_fn: Optional function to get cache timeout
         :param force_cache: Whether to force cache refresh
+        :param local_offset_cache: Build-local reuse across original Table pages
         :return: CachedTimeOffset with processed dataframe and queries
         """
         # Import here to avoid circular dependency
@@ -1599,6 +1594,22 @@ class ExploreMixin:  # pylint: disable=too-many-public-methods
                 query_object_clone_dct["row_limit"] = app.config["ROW_LIMIT"]
                 query_object_clone_dct["row_offset"] = 0
 
+            local_key = (
+                json.dumps(
+                    {"query": query_object_clone_dct, "offset": original_offset},
+                    sort_keys=True,
+                    default=json.json_int_dttm_ser,
+                )
+                if local_offset_cache is not None
+                else ""
+            )
+            if local_offset_cache is not None and local_key in local_offset_cache:
+                cached_df, cached_sql = local_offset_cache[local_key]
+                offset_dfs[offset] = cached_df.copy(deep=True)
+                queries.append(cached_sql)
+                cache_keys.append(None)
+                continue
+
             # Call the unified query method on the datasource
             result = self.query(query_object_clone_dct)
 
@@ -1621,6 +1632,12 @@ class ExploreMixin:  # pylint: disable=too-many-public-methods
 
                 # 2. rename extra query columns
                 offset_metrics_df = offset_metrics_df.rename(columns=metrics_mapping)
+
+            if local_offset_cache is not None:
+                local_offset_cache[local_key] = (
+                    offset_metrics_df.copy(deep=True),
+                    result.query,
+                )
 
             # cache df and query if caching is enabled
             if cache_key and cache_timeout_fn:
@@ -3282,31 +3299,6 @@ class ExploreMixin:  # pylint: disable=too-many-public-methods
                 )
                 having_clause_and += [Grouping(self.text(having))]
 
-            alert_groups = cast(
-                list[ResolvedAlertGroup], extras.get(ALERT_FILTERS_EXTRA_KEY, [])
-            )
-            for alert_group in alert_groups:
-                subject_key = alert_group["key"]
-                if alert_group["kind"] == "physical_column":
-                    alert_column = columns_by_name.get(subject_key)
-                    if alert_column is None:
-                        raise QueryObjectValidationError(INVALID_ALERT_RULE_MESSAGE)
-                    alert_subject = self.convert_tbl_column_to_sqla_col(
-                        alert_column, template_processor=template_processor
-                    )
-                    alert_target = where_clause_and
-                else:
-                    alert_metric = metrics_by_name.get(subject_key)
-                    if alert_metric is None:
-                        raise QueryObjectValidationError(INVALID_ALERT_RULE_MESSAGE)
-                    alert_subject = alert_metric.get_sqla_col(
-                        template_processor=template_processor
-                    )
-                    alert_target = having_clause_and
-                alert_target.append(
-                    build_alert_group_clause(alert_subject, alert_group["rules"])
-                )
-
         if apply_fetch_values_predicate and self.fetch_values_predicate:
             qry = qry.where(
                 self.get_fetch_values_predicate(template_processor=template_processor)
@@ -3516,22 +3508,6 @@ class ExploreMixin:  # pylint: disable=too-many-public-methods
                     qry = qry.where(top_groups)
 
         qry = qry.select_from(tbl)
-
-        if extras.get(ALERT_TOTALS_EXTRA_KEY):
-            if not db_engine_spec.allows_subqueries:
-                raise QueryObjectValidationError(
-                    _("Database does not support subqueries")
-                )
-            qualified_groups = qry.alias("table_alert_totals_qry")
-            total_exprs: list[ColumnElement] = []
-            for metric_expr in metrics_exprs:
-                metric_label = metric_expr.key
-                qualified_metric = qualified_groups.c.get(metric_label)
-                if qualified_metric is None:
-                    raise QueryObjectValidationError(INVALID_ALERT_RULE_MESSAGE)
-                total_exprs.append(sa.func.sum(qualified_metric).label(metric_label))
-            qry = sa.select(total_exprs).select_from(qualified_groups)
-            labels_expected = [metric.key for metric in metrics_exprs]
 
         if is_rowcount:
             if not db_engine_spec.allows_subqueries:

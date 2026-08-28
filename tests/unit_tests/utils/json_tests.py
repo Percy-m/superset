@@ -90,6 +90,15 @@ def test_json_dumps():
     assert reloaded_data["bool"] is True
 
 
+def test_json_dumps_utf8_is_opt_in_and_preserves_ascii_default() -> None:
+    """Snapshot byte budgets may use UTF-8 without changing existing API JSON."""
+    data = {"text": "中文🙂"}
+    assert json.dumps(data).isascii()
+    encoded = json.dumps(data, ensure_ascii=False)
+    assert "中文🙂" in encoded
+    assert json.loads(encoded) == data
+
+
 def test_json_dumps_encoding():
     data = {
         "utf8": b"Hello World",

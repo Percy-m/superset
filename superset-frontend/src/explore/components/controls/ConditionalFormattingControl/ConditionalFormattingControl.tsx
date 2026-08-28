@@ -26,6 +26,7 @@ import { Icons } from '@superset-ui/core/components/Icons';
 import { v4 as uuidv4 } from 'uuid';
 import ControlHeader from 'src/explore/components/ControlHeader';
 import { FormattingPopover } from './FormattingPopover';
+import { normalizeConditionalFormattingConfig } from './normalizeConditionalFormatting';
 import {
   ConditionalFormattingConfig,
   ConditionalFormattingControlProps,
@@ -78,11 +79,15 @@ const ConditionalFormattingControl = ({
   removeIrrelevantConditions,
   extraColorChoices,
   allColumns,
+  supportsAlertFilter = false,
   ...props
 }: ConditionalFormattingControlProps) => {
-  const alertFiltersEnabled = isFeatureEnabled(FeatureFlag.TableAlertFilters);
+  const alertFiltersEnabled =
+    supportsAlertFilter && isFeatureEnabled(FeatureFlag.TableAlertFilters);
   const [conditionalFormattingConfigs, setConditionalFormattingConfigs] =
-    useState<ConditionalFormattingConfig[]>(value ?? []);
+    useState<ConditionalFormattingConfig[]>(() =>
+      (value ?? []).map(normalizeConditionalFormattingConfig),
+    );
 
   useEffect(() => {
     if (onChange) {
@@ -94,7 +99,7 @@ const ConditionalFormattingControl = ({
     if (removeIrrelevantConditions) {
       // remove formatter when corresponding column is removed from controls
       const newFormattingConfigs = conditionalFormattingConfigs.filter(config =>
-        columnOptions.some((option: any) => option?.value === config?.column),
+        columnOptions.some(option => option?.value === config?.column),
       );
       if (
         newFormattingConfigs.length !== conditionalFormattingConfigs.length &&
@@ -112,12 +117,22 @@ const ConditionalFormattingControl = ({
   };
 
   const onSave = (config: ConditionalFormattingConfig) => {
-    setConditionalFormattingConfigs(prevConfigs => [...prevConfigs, config]);
+    setConditionalFormattingConfigs(prevConfigs => [
+      ...prevConfigs,
+      normalizeConditionalFormattingConfig(config),
+    ]);
   };
 
   const onEdit = (newConfig: ConditionalFormattingConfig, index: number) => {
     const newConfigs = [...conditionalFormattingConfigs];
-    newConfigs.splice(index, 1, newConfig);
+    newConfigs.splice(
+      index,
+      1,
+      normalizeConditionalFormattingConfig({
+        ...newConfig,
+        ruleId: conditionalFormattingConfigs[index].ruleId ?? newConfig.ruleId,
+      }),
+    );
     setConditionalFormattingConfigs(newConfigs);
   };
 
@@ -190,6 +205,7 @@ const ConditionalFormattingControl = ({
               destroyTooltipOnHide
               extraColorChoices={extraColorChoices}
               allColumns={allColumns}
+              supportsAlertFilter={supportsAlertFilter}
             >
               <OptionControlContainer withCaret>
                 <Label>{createLabel(config)}</Label>
@@ -207,6 +223,7 @@ const ConditionalFormattingControl = ({
           destroyTooltipOnHide
           extraColorChoices={extraColorChoices}
           allColumns={allColumns}
+          supportsAlertFilter={supportsAlertFilter}
         >
           <AddControlLabel>
             <Icons.PlusOutlined

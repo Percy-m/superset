@@ -124,6 +124,7 @@ test('duplicating a formatter assigns a new stable rule UUID', async () => {
     render(
       <ConditionalFormattingControl
         {...defaultProps}
+        supportsAlertFilter
         onChange={onChange}
         value={value}
       />,
@@ -140,6 +141,63 @@ test('duplicating a formatter assigns a new stable rule UUID', async () => {
         /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
       );
     });
+  } finally {
+    window.featureFlags = previousFlags;
+  }
+});
+
+test('normalizes legacy metadata on every initial rule without mutating input', async () => {
+  const onChange = jest.fn();
+  const value = [
+    {
+      column: 'my_col',
+      operator: Comparator.IsTrue,
+      colorScheme: 'colorSuccess',
+      alertLevel: 'RED',
+      subjectRef: { kind: 'saved_metric', key: 'old_metric' },
+    },
+    {
+      column: 'my_col',
+      operator: Comparator.IsFalse,
+      colorScheme: 'colorError',
+      alertLevel: 'GREEN',
+      subjectRef: { kind: 'physical_column', key: 'old_column' },
+    },
+  ];
+  render(
+    <ConditionalFormattingControl
+      {...defaultProps}
+      supportsAlertFilter
+      value={value}
+      onChange={onChange}
+    />,
+  );
+  await waitFor(() => expect(onChange).toHaveBeenCalled());
+  const normalized = onChange.mock.calls.at(
+    -1,
+  )?.[0] as ConditionalFormattingConfig[];
+  expect(normalized).toHaveLength(2);
+  normalized.forEach(rule => {
+    expect(rule).not.toHaveProperty('alertLevel');
+    expect(rule).not.toHaveProperty('subjectRef');
+  });
+  expect(value[0]).toHaveProperty('alertLevel', 'RED');
+  expect(value[1]).toHaveProperty('subjectRef');
+});
+
+test('the shared control does not expose duplication without the Table capability', () => {
+  const previousFlags = window.featureFlags;
+  window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
+  try {
+    render(
+      <ConditionalFormattingControl
+        {...defaultProps}
+        value={[{ column: 'my_col', operator: Comparator.IsTrue }]}
+      />,
+    );
+    expect(
+      screen.queryByLabelText('Duplicate formatter'),
+    ).not.toBeInTheDocument();
   } finally {
     window.featureFlags = previousFlags;
   }

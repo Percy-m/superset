@@ -316,6 +316,8 @@ export const getColorFormatters = memoizeOne(
         ) {
           acc.push({
             column: config?.column,
+            ruleId: config.ruleId,
+            colorScheme: config.colorScheme,
             toAllRow: config?.toAllRow,
             toTextColor: config?.toTextColor,
             columnFormatting: config?.columnFormatting,

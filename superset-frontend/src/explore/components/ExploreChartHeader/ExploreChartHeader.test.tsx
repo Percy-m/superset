@@ -29,7 +29,14 @@ import * as chartAction from 'src/components/Chart/chartAction';
 import * as saveModalActions from 'src/explore/actions/saveModalActions';
 import * as downloadAsImage from 'src/utils/downloadAsImage';
 import * as exploreUtils from 'src/explore/exploreUtils';
-import { FeatureFlag, VizType } from '@superset-ui/core';
+import {
+  FeatureFlag,
+  TableColorFilterState,
+  TableColorMetadata,
+  TableColorSelection,
+  VizType,
+} from '@superset-ui/core';
+import { toasters } from 'src/components/MessageToasts/withToasts';
 import { useUnsavedChangesPrompt } from 'src/hooks/useUnsavedChangesPrompt';
 import ExploreHeader, { ExploreChartHeaderProps } from '.';
 import { getChartMetadataRegistry } from '@superset-ui/core';
@@ -152,6 +159,80 @@ const createProps = (additionalProps = {}) =>
     isStarred: false,
     ...additionalProps,
   }) as unknown as ExploreChartHeaderProps;
+
+interface ColorCurrentViewState {
+  alertFilter?: TableColorFilterState;
+  clientView?: {
+    columns: { key: string; label: string }[];
+    rows: { gross_profit: number }[];
+    count: number;
+    snapshotId?: string;
+    rowIndices?: number[];
+  };
+}
+
+const createColorCurrentViewFixture = (rowIndices: number[] = [7, 3]) => {
+  const alertFilter: TableColorFilterState = {
+    version: 2,
+    selections: [{ column: 'gross_profit', colors: ['GREEN'] }],
+    snapshotId: 'color-snapshot',
+    generation: 'color-generation',
+  };
+  const ownState: ColorCurrentViewState = {
+    alertFilter,
+    clientView: {
+      columns: [{ key: 'gross_profit', label: 'Gross profit' }],
+      rows: rowIndices.map(index => ({ gross_profit: index * 10 })),
+      count: rowIndices.length,
+      snapshotId: 'color-snapshot',
+      rowIndices,
+    },
+  };
+  const metadata: Extract<TableColorMetadata, { status: 'ready' }> = {
+    status: 'ready',
+    snapshot_id: 'color-snapshot',
+    generation: 'color-generation',
+    baseline_rowcount: 8,
+    filtered_rowcount: 8,
+    source_page_size: 0,
+    catalog: { gross_profit: ['GREEN', 'YELLOW', 'RED'] },
+    capabilities: { gross_profit: { enabled: true, supported: true } },
+    styles: [],
+    expires_in: 600,
+    selections: alertFilter.selections,
+  };
+  const base = createProps();
+  const props = createProps({
+    canDownload: true,
+    ownState,
+    chart: {
+      ...base.chart,
+      latestQueryFormData: {
+        ...base.chart.latestQueryFormData,
+        viz_type: VizType.Table,
+        server_pagination: false,
+        conditional_formatting: [
+          {
+            column: 'gross_profit',
+            operator: '<',
+            targetValue: 0,
+            colorScheme: 'colorSuccess',
+            useGradient: false,
+            filterable: true,
+          },
+        ],
+      },
+      queriesResponse: [{ table_color_metadata: metadata }],
+    },
+  });
+  return { props, ownState, metadata };
+};
+
+const currentViewFormats = [
+  { format: 'csv', label: 'Export to .CSV' },
+  { format: 'json', label: 'Export to .JSON' },
+  { format: 'xlsx', label: 'Export to Excel' },
+] as const;
 
 fetchMock.post(
   'http://api/v1/chart/data?form_data=%7B%22slice_id%22%3A318%7D',
@@ -745,8 +826,10 @@ describe('Additional actions tests', () => {
   describe('Export All Data', () => {
     let spyDownloadAsImage: jest.SpyInstance;
     let spyExportChart: jest.SpyInstance;
+    let previousFeatureFlags: typeof window.featureFlags;
 
     beforeEach(() => {
+      previousFeatureFlags = window.featureFlags;
       spyDownloadAsImage = jest.spyOn(downloadAsImage, 'default');
       spyExportChart = jest.spyOn(exploreUtils, 'exportChart');
 
@@ -760,6 +843,7 @@ describe('Additional actions tests', () => {
     });
 
     afterEach(async () => {
+      window.featureFlags = previousFeatureFlags;
       spyDownloadAsImage.mockRestore();
       spyExportChart.mockRestore();
       // Wait for any pending effects to complete
@@ -815,6 +899,177 @@ describe('Additional actions tests', () => {
       expect(spyExportChart.mock.calls.length).toBe(1);
       spyExportChart.mockRestore();
     });
+
+    test.each([
+      {
+        name: 'client 24 matches',
+        filteredRows: 24,
+        serverPagination: false,
+        threshold: 50,
+        enabled: true,
+        vizType: VizType.Table,
+        status: 'ready',
+        streaming: false,
+      },
+      {
+        name: 'client zero matches',
+        filteredRows: 0,
+        serverPagination: false,
+        threshold: 50,
+        enabled: true,
+        vizType: VizType.Table,
+        status: 'ready',
+        streaming: false,
+      },
+      {
+        name: 'server 24 matches',
+        filteredRows: 24,
+        serverPagination: true,
+        threshold: 50,
+        enabled: true,
+        vizType: VizType.Table,
+        status: 'ready',
+        streaming: false,
+      },
+      {
+        name: 'server zero matches',
+        filteredRows: 0,
+        serverPagination: true,
+        threshold: 50,
+        enabled: true,
+        vizType: VizType.Table,
+        status: 'ready',
+        streaming: false,
+      },
+      {
+        name: 'client matches above threshold',
+        filteredRows: 24,
+        serverPagination: false,
+        threshold: 20,
+        enabled: true,
+        vizType: VizType.Table,
+        status: 'ready',
+        streaming: true,
+      },
+      {
+        name: 'server matches above threshold',
+        filteredRows: 24,
+        serverPagination: true,
+        threshold: 20,
+        enabled: true,
+        vizType: VizType.Table,
+        status: 'ready',
+        streaming: true,
+      },
+      {
+        name: 'flag-off native SQL count',
+        filteredRows: 0,
+        serverPagination: false,
+        threshold: 50,
+        enabled: false,
+        vizType: VizType.Table,
+        status: 'ready',
+        streaming: true,
+      },
+      {
+        name: 'another visualization',
+        filteredRows: 0,
+        serverPagination: false,
+        threshold: 50,
+        enabled: true,
+        vizType: VizType.Histogram,
+        status: 'ready',
+        streaming: true,
+      },
+      {
+        name: 'unavailable color metadata',
+        filteredRows: 0,
+        serverPagination: false,
+        threshold: 50,
+        enabled: true,
+        vizType: VizType.Table,
+        status: 'unavailable',
+        streaming: true,
+      },
+      {
+        name: 'ordinary Table without color metadata',
+        filteredRows: 0,
+        serverPagination: false,
+        threshold: 50,
+        enabled: true,
+        vizType: VizType.Table,
+        status: 'missing',
+        streaming: true,
+      },
+    ])(
+      'CSV streaming threshold respects $name',
+      async ({
+        filteredRows,
+        serverPagination,
+        threshold,
+        enabled,
+        vizType,
+        status,
+        streaming,
+      }) => {
+        window.featureFlags = {
+          ...window.featureFlags,
+          [FeatureFlag.TableAlertFilters]: enabled,
+        };
+        spyExportChart.mockResolvedValue(undefined);
+        const { props, metadata } = createColorCurrentViewFixture();
+        metadata.filtered_rowcount = filteredRows;
+        metadata.baseline_rowcount = 97;
+        props.chart.latestQueryFormData.viz_type = vizType;
+        props.chart.latestQueryFormData.server_pagination = serverPagination;
+        const colorMetadata: TableColorMetadata | undefined =
+          status === 'ready'
+            ? metadata
+            : status === 'unavailable'
+              ? {
+                  status: 'unavailable',
+                  capabilities: {},
+                  reason: {
+                    code: 'TABLE_COLOR_LIMIT',
+                    message: 'Narrow the query.',
+                  },
+                }
+              : undefined;
+        props.chart.queriesResponse = [
+          {
+            table_color_metadata: colorMetadata,
+            sql_rowcount: 97,
+            rowcount: filteredRows,
+          },
+          ...(serverPagination ? [{ data: [{ rowcount: 97 }] }] : []),
+        ];
+        render(<ExploreHeader {...props} />, {
+          useRedux: true,
+          initialState: {
+            explore: {
+              slice: props.slice,
+              form_data: props.chart.latestQueryFormData,
+            },
+            charts: { 318: props.chart },
+            common: { conf: { CSV_STREAMING_ROW_THRESHOLD: threshold } },
+          },
+        });
+
+        await userEvent.click(screen.getByLabelText('Menu actions trigger'));
+        await userEvent.hover(await screen.findByText('Data Export Options'));
+        await userEvent.hover(await screen.findByText('Export All Data'));
+        await userEvent.click(await screen.findByText('Export to .CSV'));
+
+        expect(spyExportChart).toHaveBeenCalledTimes(1);
+        expect(spyExportChart).toHaveBeenCalledWith(
+          expect.objectContaining({
+            resultFormat: 'csv',
+            onStartStreamingExport: streaming ? expect.any(Function) : null,
+          }),
+        );
+        expect(props.chart.queriesResponse[0].sql_rowcount).toBe(97);
+      },
+    );
 
     test('Should not export to JSON if canDownload=false', async () => {
       const props = createProps();
@@ -912,6 +1167,9 @@ describe('Additional actions tests', () => {
   describe('Current View', () => {
     let spyDownloadAsImage: jest.SpyInstance;
     let spyExportChart: jest.SpyInstance;
+    let spyDangerToast: jest.SpyInstance;
+    let colorRegistryGetSpy: jest.SpyInstance | undefined;
+    let previousFeatureFlags: typeof window.featureFlags;
 
     let originalURL: typeof URL;
     let anchorClickSpy: jest.SpyInstance;
@@ -947,8 +1205,17 @@ describe('Additional actions tests', () => {
     });
 
     beforeEach(() => {
+      previousFeatureFlags = window.featureFlags;
+      window.featureFlags = {
+        ...previousFeatureFlags,
+        [FeatureFlag.TableAlertFilters]: false,
+      };
+      jest.mocked(URL.createObjectURL).mockClear();
+      jest.mocked(writeFile).mockClear();
+      anchorClickSpy.mockClear();
       spyDownloadAsImage = jest.spyOn(downloadAsImage, 'default');
       spyExportChart = jest.spyOn(exploreUtils, 'exportChart');
+      spyDangerToast = jest.spyOn(toasters, 'addDangerToast');
 
       (useUnsavedChangesPrompt as jest.Mock).mockReturnValue({
         showModal: false,
@@ -962,7 +1229,315 @@ describe('Additional actions tests', () => {
     afterEach(async () => {
       spyDownloadAsImage.mockRestore();
       spyExportChart.mockRestore();
+      spyDangerToast.mockRestore();
+      colorRegistryGetSpy?.mockRestore();
+      colorRegistryGetSpy = undefined;
+      window.featureFlags = previousFeatureFlags;
       await new Promise(r => setTimeout(r, 0));
+    });
+
+    const renderColorCurrentView = (
+      props: ExploreChartHeaderProps,
+      enabled = true,
+    ) => {
+      window.featureFlags = {
+        ...window.featureFlags,
+        [FeatureFlag.TableAlertFilters]: enabled,
+      };
+      colorRegistryGetSpy = mockExportCurrentViewBehavior();
+      spyExportChart.mockResolvedValue(undefined);
+      render(<ExploreHeader {...props} />, {
+        useRedux: true,
+        initialState: {
+          explore: {
+            slice: props.slice,
+            form_data: props.chart.latestQueryFormData,
+          },
+          charts: { 318: props.chart },
+        },
+      });
+    };
+
+    const clickCurrentViewExport = async (label: string) => {
+      await userEvent.click(screen.getByLabelText('Menu actions trigger'));
+      await userEvent.hover(await screen.findByText('Data Export Options'));
+      await userEvent.hover(await screen.findByText('Export Current View'));
+      await userEvent.click(await screen.findByText(label));
+    };
+
+    test.each(currentViewFormats)(
+      'color-table $format Current View accepts equivalent reversed columns and colors',
+      async ({ label }) => {
+        const { props, ownState, metadata } = createColorCurrentViewFixture();
+        metadata.selections = [
+          { column: 'error_count', colors: ['RED'] },
+          { column: 'gross_profit', colors: ['GREEN', 'YELLOW'] },
+        ];
+        ownState.alertFilter!.selections = [
+          { column: 'gross_profit', colors: ['YELLOW', 'GREEN'] },
+          { column: 'error_count', colors: ['RED'] },
+        ];
+        renderColorCurrentView(props);
+
+        await clickCurrentViewExport(label);
+
+        expect(spyExportChart).toHaveBeenCalledTimes(1);
+        expect(spyExportChart).toHaveBeenCalledWith(
+          expect.objectContaining({
+            currentView: {
+              snapshotId: 'color-snapshot',
+              rowIndices: [7, 3],
+            },
+          }),
+        );
+        expect(spyDangerToast).not.toHaveBeenCalled();
+      },
+    );
+
+    test.each<{
+      name: string;
+      selections: TableColorSelection[];
+    }>([
+      {
+        name: 'a missing selected column',
+        selections: [{ column: 'gross_profit', colors: ['GREEN', 'YELLOW'] }],
+      },
+      {
+        name: 'a changed color in another column',
+        selections: [
+          { column: 'gross_profit', colors: ['YELLOW', 'GREEN'] },
+          { column: 'error_count', colors: ['GREEN'] },
+        ],
+      },
+      {
+        name: 'colors moved across columns',
+        selections: [
+          { column: 'gross_profit', colors: ['RED'] },
+          { column: 'error_count', colors: ['GREEN', 'YELLOW'] },
+        ],
+      },
+      { name: 'a pending clear of every color', selections: [] },
+    ])(
+      'color-table Current View still refuses $name',
+      async ({ selections }) => {
+        const { props, ownState, metadata } = createColorCurrentViewFixture();
+        metadata.selections = [
+          { column: 'error_count', colors: ['RED'] },
+          { column: 'gross_profit', colors: ['GREEN', 'YELLOW'] },
+        ];
+        ownState.alertFilter!.selections = selections;
+        renderColorCurrentView(props);
+
+        await clickCurrentViewExport('Export to .CSV');
+
+        expect(spyDangerToast).toHaveBeenCalledWith(
+          'Load the current table view before exporting.',
+        );
+        expect(spyExportChart).not.toHaveBeenCalled();
+        expect(URL.createObjectURL).not.toHaveBeenCalled();
+        expect(writeFile).not.toHaveBeenCalled();
+      },
+    );
+
+    test.each(currentViewFormats)(
+      'color-table $format Current View sends its sorted snapshot projection to the server',
+      async ({ format, label }) => {
+        const { props } = createColorCurrentViewFixture([7, 3]);
+        renderColorCurrentView(props);
+
+        await clickCurrentViewExport(label);
+
+        await waitFor(() => expect(spyExportChart).toHaveBeenCalledTimes(1));
+        expect(spyExportChart).toHaveBeenCalledWith({
+          formData: props.chart.latestQueryFormData,
+          ownState: props.ownState,
+          resultType: 'results',
+          resultFormat: format,
+          currentView: {
+            snapshotId: 'color-snapshot',
+            rowIndices: [7, 3],
+          },
+        });
+        expect(spyDangerToast).not.toHaveBeenCalled();
+        expect(URL.createObjectURL).not.toHaveBeenCalled();
+        expect(writeFile).not.toHaveBeenCalled();
+      },
+    );
+
+    test.each(currentViewFormats)(
+      'color-table $format Current View exports an empty search projection without falling back to all rows',
+      async ({ format, label }) => {
+        const { props, metadata } = createColorCurrentViewFixture([]);
+        expect(metadata.filtered_rowcount).toBeGreaterThan(0);
+        renderColorCurrentView(props);
+
+        await clickCurrentViewExport(label);
+
+        await waitFor(() => expect(spyExportChart).toHaveBeenCalledTimes(1));
+        expect(spyExportChart).toHaveBeenCalledWith(
+          expect.objectContaining({
+            resultType: 'results',
+            resultFormat: format,
+            currentView: {
+              snapshotId: 'color-snapshot',
+              rowIndices: [],
+            },
+          }),
+        );
+        expect(spyDangerToast).not.toHaveBeenCalled();
+        expect(URL.createObjectURL).not.toHaveBeenCalled();
+        expect(writeFile).not.toHaveBeenCalled();
+      },
+    );
+
+    test.each(currentViewFormats)(
+      'color-table $format Current View rejects missing snapshot projection instead of exporting local raw rows',
+      async ({ label }) => {
+        const { props, ownState } = createColorCurrentViewFixture();
+        delete ownState.clientView?.snapshotId;
+        renderColorCurrentView(props);
+
+        await clickCurrentViewExport(label);
+
+        expect(spyDangerToast).toHaveBeenCalledWith(
+          'Load the current table view before exporting.',
+        );
+        expect(spyExportChart).not.toHaveBeenCalled();
+        expect(URL.createObjectURL).not.toHaveBeenCalled();
+        expect(writeFile).not.toHaveBeenCalled();
+      },
+    );
+
+    test.each<{
+      name: string;
+      invalidate: (
+        fixture: ReturnType<typeof createColorCurrentViewFixture>,
+      ) => void;
+    }>([
+      {
+        name: 'missing client view',
+        invalidate: ({ ownState }) => {
+          delete ownState.clientView;
+        },
+      },
+      {
+        name: 'missing row indices',
+        invalidate: ({ ownState }) => {
+          delete ownState.clientView?.rowIndices;
+        },
+      },
+      {
+        name: 'stale client snapshot',
+        invalidate: ({ ownState }) => {
+          if (ownState.clientView) {
+            ownState.clientView.snapshotId = 'previous-snapshot';
+          }
+        },
+      },
+      {
+        name: 'a pending color selection',
+        invalidate: ({ ownState }) => {
+          if (ownState.alertFilter) {
+            ownState.alertFilter.selections = [
+              { column: 'gross_profit', colors: ['RED'] },
+            ];
+          }
+        },
+      },
+      {
+        name: 'a loading chart',
+        invalidate: ({ props }) => {
+          props.chart.chartStatus = 'loading';
+        },
+      },
+      {
+        name: 'missing response metadata',
+        invalidate: ({ props }) => {
+          props.chart.queriesResponse = null;
+        },
+      },
+    ])(
+      'color-table Current View rejects $name without an unfiltered fallback',
+      async ({ invalidate }) => {
+        const fixture = createColorCurrentViewFixture();
+        invalidate(fixture);
+        renderColorCurrentView(fixture.props);
+
+        await clickCurrentViewExport('Export to .CSV');
+
+        expect(spyDangerToast).toHaveBeenCalledWith(
+          'Load the current table view before exporting.',
+        );
+        expect(spyExportChart).not.toHaveBeenCalled();
+        expect(URL.createObjectURL).not.toHaveBeenCalled();
+        expect(writeFile).not.toHaveBeenCalled();
+      },
+    );
+
+    test.each(currentViewFormats)(
+      'color-table $format All Data does not inherit the Current View row projection',
+      async ({ format, label }) => {
+        const { props } = createColorCurrentViewFixture([7, 3]);
+        renderColorCurrentView(props);
+
+        await userEvent.click(screen.getByLabelText('Menu actions trigger'));
+        await userEvent.hover(await screen.findByText('Data Export Options'));
+        await userEvent.hover(await screen.findByText('Export All Data'));
+        await userEvent.click(await screen.findByText(label));
+
+        await waitFor(() => expect(spyExportChart).toHaveBeenCalledTimes(1));
+        expect(spyExportChart).toHaveBeenCalledWith(
+          expect.objectContaining({
+            formData: props.chart.latestQueryFormData,
+            ownState: props.ownState,
+            resultFormat: format,
+          }),
+        );
+        expect(spyExportChart.mock.calls[0][0]).not.toHaveProperty(
+          'currentView',
+        );
+      },
+    );
+
+    test.each(currentViewFormats)(
+      'flag-off $format Current View preserves native local export with saved filterable rules',
+      async ({ format, label }) => {
+        const { props, ownState } = createColorCurrentViewFixture();
+        delete ownState.clientView?.snapshotId;
+        delete ownState.clientView?.rowIndices;
+        props.chart.queriesResponse = null;
+        renderColorCurrentView(props, false);
+
+        await clickCurrentViewExport(label);
+
+        expect(spyExportChart).not.toHaveBeenCalled();
+        expect(spyDangerToast).not.toHaveBeenCalled();
+        await waitFor(() => {
+          if (format === 'xlsx') {
+            expect(writeFile).toHaveBeenCalledTimes(1);
+          } else {
+            expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
+            expect(anchorClickSpy).toHaveBeenCalledTimes(1);
+          }
+        });
+      },
+    );
+
+    test('color-table Current View reports a rejected snapshot export without a local fallback', async () => {
+      const { props } = createColorCurrentViewFixture();
+      renderColorCurrentView(props);
+      spyExportChart.mockRejectedValue(new Error('Snapshot expired'));
+
+      await clickCurrentViewExport('Export to Excel');
+
+      await waitFor(() =>
+        expect(spyDangerToast).toHaveBeenCalledWith(
+          'Load the current table view before exporting.',
+        ),
+      );
+      expect(spyExportChart).toHaveBeenCalledTimes(1);
+      expect(URL.createObjectURL).not.toHaveBeenCalled();
+      expect(writeFile).not.toHaveBeenCalled();
     });
 
     test('Screenshot (Current View) calls downloadAsImage', async () => {

@@ -31,6 +31,8 @@ import {
   DataMask,
   DatasourceType,
   LatestQueryFormData,
+  TableColorMetadata,
+  TableColorFilterState,
 } from '@superset-ui/core';
 import { GenericDataType } from '@apache-superset/core/common';
 import { t } from '@apache-superset/core/translation';
@@ -51,11 +53,17 @@ import { allowCrossDomain as domainShardingEnabled } from 'src/utils/hostNamesCo
 import { updateDataMask } from 'src/dataMask/actions';
 import { waitForAsyncData } from 'src/middleware/asyncEvent';
 import { extendedDayjs } from '@superset-ui/core/utils/dates';
+import { isEqual } from 'lodash';
 import type { Dispatch, Action, AnyAction } from 'redux';
 import type { ThunkAction, ThunkDispatch } from 'redux-thunk';
 import type { History } from 'history';
 import type { ChartState } from 'src/explore/types';
 import { openSqlLabQuery } from 'src/SqlLab/utils/openSqlLabQuery';
+import {
+  areTableColorSelectionsEqual,
+  getTableColorFilterErrorMessage,
+  rememberTableColorFilterResponse,
+} from './tableColorFilterRequest';
 
 // Types for the Redux state
 export interface ChartsState {
@@ -277,6 +285,7 @@ export interface GetChartDataRequestParams {
   method?: 'GET' | 'POST';
   requestParams?: RequestParams;
   ownState?: JsonObject;
+  tableColorThemeMode?: 'default' | 'dark';
 }
 
 // runAnnotationQuery params interface
@@ -477,15 +486,31 @@ const v1ChartDataRequest = async (
   setDataMask: (dataMask: DataMask) => void,
   ownState: JsonObject,
   parseMethod?: string,
+  tableColorThemeMode?: 'default' | 'dark',
 ): Promise<ChartDataRequestResponse> => {
   const payload = await buildV1ChartDataPayload({
-    formData: formData as QueryFormData,
+    prepareColorFilter: true,
+    formData: {
+      ...formData,
+      ...(requestParams.dashboard_id &&
+      formData.viz_type === 'table' &&
+      isFeatureEnabled(FeatureFlag.TableAlertFilters)
+        ? { dashboardId: requestParams.dashboard_id }
+        : {}),
+    } as QueryFormData,
     resultType,
     resultFormat,
     force,
     setDataMask,
     ownState,
+    tableColorThemeMode,
   });
+  if (
+    payload.queries?.[0]?.table_color_filter &&
+    requestParams.signal?.aborted
+  ) {
+    throw new DOMException('Aborted chart request', 'AbortError');
+  }
 
   // The dashboard id is added to query params for tracking purposes
   const { slice_id: sliceId } = formData;
@@ -514,9 +539,22 @@ const v1ChartDataRequest = async (
     parseMethod,
   };
 
-  return SupersetClient.post(
+  const response = await (SupersetClient.post(
     querySettings as Parameters<typeof SupersetClient.post>[0],
-  ) as Promise<ChartDataRequestResponse>;
+  ) as Promise<ChartDataRequestResponse>);
+  if (
+    payload.queries?.[0]?.table_color_filter &&
+    requestParams.signal?.aborted
+  ) {
+    throw new DOMException('Aborted chart request', 'AbortError');
+  }
+  rememberTableColorFilterResponse(
+    payload,
+    response.json?.result?.[0]?.table_color_metadata as
+      | TableColorMetadata
+      | undefined,
+  );
+  return response;
 };
 
 export async function getChartDataRequest({
@@ -528,6 +566,7 @@ export async function getChartDataRequest({
   method = 'POST' as const,
   requestParams = {},
   ownState = {},
+  tableColorThemeMode,
 }: GetChartDataRequestParams): Promise<ChartDataRequestResponse> {
   let querySettings: RequestParams = {
     ...requestParams,
@@ -561,6 +600,7 @@ export async function getChartDataRequest({
     setDataMask,
     ownState,
     parseMethod,
+    tableColorThemeMode,
   );
 }
 
@@ -753,6 +793,7 @@ export function exploreJSON(
   key?: string | number,
   dashboardId?: number,
   ownState?: JsonObject,
+  tableColorThemeMode?: 'default' | 'dark',
 ): ChartThunkAction<Promise<unknown[]>> {
   return async (
     dispatch: ChartThunkDispatch,
@@ -762,6 +803,26 @@ export function exploreJSON(
     const logStart = Logger.getTimestamp();
     const controller = new AbortController();
     const prevController = key ? state.charts?.[key]?.queryController : null;
+    const previousQueries =
+      key !== undefined ? state.charts?.[key]?.queriesResponse : undefined;
+    const previousColors = previousQueries?.[0]?.table_color_metadata as
+      | TableColorMetadata
+      | undefined;
+    const usesColorFilter =
+      formData.viz_type === 'table' &&
+      isFeatureEnabled(FeatureFlag.TableAlertFilters) &&
+      Array.isArray(formData.conditional_formatting) &&
+      formData.conditional_formatting.some(rule => rule?.filterable === true);
+    const superseded = () => {
+      const active =
+        key !== undefined
+          ? getState().charts?.[key]?.queryController
+          : undefined;
+      return (
+        controller.signal.aborted ||
+        Boolean(active && active !== prevController && active !== controller)
+      );
+    };
     const queryTimeout =
       timeout || state.common.conf.SUPERSET_WEBSERVER_TIMEOUT || 0;
 
@@ -793,6 +854,7 @@ export function exploreJSON(
       method: 'POST',
       requestParams,
       ownState,
+      tableColorThemeMode,
     });
 
     const [useLegacyApi] = getQuerySettings(formData);
@@ -801,6 +863,7 @@ export function exploreJSON(
         handleChartDataResponse(response, json, useLegacyApi),
       )
       .then(queriesResponse => {
+        if (usesColorFilter && superseded()) return undefined;
         (queriesResponse as QueryData[]).forEach(
           (resultItem: QueryData & { applied_filters?: JsonObject[] }) =>
             dispatch(
@@ -830,12 +893,13 @@ export function exploreJSON(
         );
       })
       .catch(
-        (
+        async (
           response: Error & {
             name?: string;
             statusText?: string;
           },
         ) => {
+          if (usesColorFilter && superseded()) return undefined;
           // Ignore abort errors - they're expected when filters change quickly
           const isAbort =
             response?.name === 'AbortError' || response?.statusText === 'abort';
@@ -843,6 +907,88 @@ export function exploreJSON(
             // Abort is expected: filters changed, chart unmounted, etc.
             return dispatch(
               chartUpdateStopped(key as string | number, controller),
+            );
+          }
+
+          if (
+            usesColorFilter &&
+            previousColors?.status === 'ready' &&
+            previousQueries
+          ) {
+            const message = await getTableColorFilterErrorMessage(response);
+            if (superseded()) return undefined;
+            const activeOwnState =
+              getState().dataMask?.[formData.slice_id]?.ownState ??
+              ownState ??
+              {};
+            const appliedFilter = {
+              version: 2,
+              selections: previousColors.selections ?? [],
+              snapshotId: previousColors.snapshot_id,
+              generation: previousColors.generation,
+            };
+            const activeFilter = activeOwnState.alertFilter as
+              | TableColorFilterState
+              | undefined;
+            if (
+              !isEqual(
+                { ...activeFilter, selections: [] },
+                { ...appliedFilter, selections: [] },
+              ) ||
+              !areTableColorSelectionsEqual(
+                activeFilter?.selections,
+                appliedFilter.selections,
+              )
+            ) {
+              dispatch(
+                updateDataMask(formData.slice_id, {
+                  ownState: { ...activeOwnState, alertFilter: appliedFilter },
+                }),
+              );
+            }
+            dispatch(addDangerToast(message));
+            return dispatch(
+              chartUpdateSucceeded(
+                previousQueries.map((query, index) =>
+                  index === 0
+                    ? {
+                        ...query,
+                        table_color_metadata: {
+                          ...previousColors,
+                          request_error: message,
+                        },
+                      }
+                    : query,
+                ),
+                key as string | number,
+              ),
+            );
+          }
+
+          if (usesColorFilter && previousQueries?.length) {
+            const message = t(
+              'Color filtering could not be prepared. The previous table is still displayed.',
+            );
+            dispatch(addDangerToast(message));
+            return dispatch(
+              chartUpdateSucceeded(
+                previousQueries.map((query, index) =>
+                  index === 0
+                    ? {
+                        ...query,
+                        table_color_metadata: {
+                          status: 'unavailable',
+                          capabilities: {},
+                          reason: {
+                            code: 'TABLE_COLOR_FILTER_PREPARE_FAILED',
+                            message,
+                          },
+                        },
+                      }
+                    : query,
+                ),
+                key as string | number,
+              ),
             );
           }
 
@@ -924,8 +1070,17 @@ export function postChartFormData(
   key?: string | number,
   dashboardId?: number,
   ownState?: JsonObject,
+  tableColorThemeMode?: 'default' | 'dark',
 ): ChartThunkAction<Promise<unknown[]>> {
-  return exploreJSON(formData, force, timeout, key, dashboardId, ownState);
+  return exploreJSON(
+    formData,
+    force,
+    timeout,
+    key,
+    dashboardId,
+    ownState,
+    tableColorThemeMode,
+  );
 }
 
 export function redirectSQLLab(

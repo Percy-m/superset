@@ -1129,6 +1129,17 @@ CACHE_CONFIG: CacheConfig = {"CACHE_TYPE": "NullCache"}
 # Cache for datasource metadata and query results
 DATA_CACHE_CONFIG: CacheConfig = {"CACHE_TYPE": "NullCache"}
 
+# Independent resource budgets for complete, immutable Table color-filter results.
+# These limits do not change ROW_LIMIT, SQL scan limits or server pagination sizes.
+TABLE_ALERT_FILTER_MAX_ROWS = 1000
+TABLE_ALERT_FILTER_MAX_CELLS = 1_000_000
+TABLE_ALERT_FILTER_MAX_BYTES = 64 * 1024 * 1024
+TABLE_ALERT_FILTER_MAX_CELL_BYTES = 1024 * 1024
+TABLE_ALERT_FILTER_TIMEOUT = 30
+TABLE_ALERT_FILTER_SNAPSHOT_TTL = 300
+# Process-local caches require an explicit single-worker development setup.
+TABLE_ALERT_FILTER_ALLOW_IN_MEMORY_CACHE = False
+
 # Cache for dashboard filter state. `CACHE_TYPE` defaults to `SupersetMetastoreCache`
 # that stores the values in the key-value table in the Superset metastore, as it's
 # required for Superset to operate correctly, but can be replaced by any

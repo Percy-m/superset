@@ -19,6 +19,7 @@
 import { render, screen } from 'spec/helpers/testing-library';
 import { PluginContext } from 'src/components';
 import type { PluginContextType } from 'src/components/DynamicPlugins/types';
+import { DataMaskStateWithId, FeatureFlag } from '@superset-ui/core';
 
 import DashboardComponent from 'src/dashboard/components/Dashboard';
 import { CHART_TYPE } from 'src/dashboard/util/componentTypes';
@@ -34,7 +35,10 @@ import dashboardInfo from 'spec/fixtures/mockDashboardInfo';
 import { dashboardLayout } from 'spec/fixtures/mockDashboardLayout';
 import dashboardState from 'spec/fixtures/mockDashboardState';
 import { sliceEntitiesForChart as sliceEntities } from 'spec/fixtures/mockSliceEntities';
-import { getAllActiveFilters } from 'src/dashboard/util/activeAllDashboardFilters';
+import {
+  getAllActiveFilters,
+  getRelevantDataMask,
+} from 'src/dashboard/util/activeAllDashboardFilters';
 import { getRelatedCharts } from 'src/dashboard/util/getRelatedCharts';
 
 // Test mock data doesn't perfectly match strict component prop types,
@@ -386,6 +390,61 @@ describe('Dashboard', () => {
     );
 
     expect(mockTriggerQuery).not.toHaveBeenCalled();
+  });
+
+  test('first color export projection does not refresh the Dashboard or erase an active selection', () => {
+    const previousFlags = window.featureFlags;
+    window.featureFlags = { [FeatureFlag.TableAlertFilters]: true };
+    try {
+      const { rerender } = renderDashboard({
+        ownDataCharts: getRelevantDataMask({}, 'ownState'),
+        dashboardState: { ...dashboardState, editMode: false },
+      });
+      const apply = (dataMask: DataMaskStateWithId) =>
+        rerender(
+          <PluginContext.Provider value={mockPluginContext}>
+            <Dashboard
+              {...props}
+              ownDataCharts={getRelevantDataMask(dataMask, 'ownState')}
+              activeFilters={getAllActiveFilters({
+                chartConfiguration: {},
+                dataMask,
+                nativeFilters: {},
+                allSliceIds: Object.keys(props.slices).map(Number),
+              })}
+              dashboardState={{ ...dashboardState, editMode: false }}
+            >
+              <ChildrenComponent />
+            </Dashboard>
+          </PluginContext.Provider>,
+        );
+      const clientView = { snapshotId: 'snapshot-1', rowIndices: [4, 2] };
+      apply({ 1: { id: '1', ownState: { clientView } } });
+      expect(mockTriggerQuery).not.toHaveBeenCalled();
+      const alertFilter = {
+        version: 2,
+        selections: [{ column: 'profit', colors: ['GREEN'] }],
+      };
+      apply({ 1: { id: '1', ownState: { alertFilter, clientView } } });
+      expect(mockTriggerQuery).toHaveBeenCalledTimes(1);
+      mockTriggerQuery.mockClear();
+      const nextMask = {
+        1: {
+          id: '1',
+          ownState: {
+            alertFilter,
+            clientView: { ...clientView, rowIndices: [] },
+          },
+        },
+      };
+      apply(nextMask);
+      expect(mockTriggerQuery).not.toHaveBeenCalled();
+      expect(getRelevantDataMask(nextMask, 'ownState')).toEqual({
+        1: { alertFilter },
+      });
+    } finally {
+      window.featureFlags = previousFlags;
+    }
   });
 
   test('should call refresh when ownDataCharts pageSize changes', () => {

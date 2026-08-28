@@ -21,6 +21,8 @@ import {
   DataMaskWithId,
   JsonObject,
   PartialFilters,
+  FeatureFlag,
+  isFeatureEnabled,
 } from '@superset-ui/core';
 import { omit } from 'lodash';
 import { ActiveFilters, ChartConfiguration } from '../types';
@@ -46,7 +48,15 @@ export const getRelevantDataMask = (
           return [item.id, omit(value, ['clientView'])];
         }
         return [item.id, value];
-      }),
+      })
+      .filter(
+        ([, value]) =>
+          prop !== 'ownState' ||
+          !isFeatureEnabled(FeatureFlag.TableAlertFilters) ||
+          !value ||
+          typeof value !== 'object' ||
+          Object.keys(value).length > 0,
+      ),
   );
 
 interface LayerInfo {
@@ -112,6 +122,15 @@ export const getAllActiveFilters = ({
 
   Object.values(dataMask).forEach(({ id: filterId, extraFormData = {} }) => {
     const nativeFilter = nativeFilters?.[filterId];
+    if (
+      isFeatureEnabled(FeatureFlag.TableAlertFilters) &&
+      !nativeFilter &&
+      Object.keys(extraFormData ?? {}).length === 0
+    ) {
+      // A color selection/export projection is chart-owned state, not an
+      // empty cross-filter that should refresh every other chart on creation.
+      return;
+    }
     let scope =
       (nativeFilter && 'chartsInScope' in nativeFilter
         ? nativeFilter.chartsInScope

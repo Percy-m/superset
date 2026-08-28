@@ -14,18 +14,17 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+import copy
+from typing import Any
 from unittest.mock import Mock, patch
 
 import pytest
+from marshmallow import ValidationError
 
 from superset.common.chart_data import ChartDataResultFormat
 from superset.common.query_context_factory import QueryContextFactory
 from superset.common.query_object import QueryObject
-from superset.common.table_alerts import (
-    ALERT_FILTER_FINGERPRINT_EXTRA_KEY,
-    ALERT_FILTERS_EXTRA_KEY,
-    ALERT_TOTALS_EXTRA_KEY,
-)
+from superset.common.table_color_schema import TableColorFilterError
 from superset.exceptions import QueryObjectValidationError
 from superset.models.slice import Slice
 
@@ -81,87 +80,177 @@ class TestQueryContextFactory:
                     result_format_options={"styled": True},
                 )
 
-    @patch("superset.common.query_context_factory.is_feature_enabled")
-    def test_resolve_table_alerts_ignores_references_when_disabled(
-        self, mock_is_feature_enabled
-    ):
-        """Feature-off behavior removes unsupported client-only fields."""
-        mock_is_feature_enabled.return_value = False
-        query = {
-            "columns": ["region"],
-            "alert_filters": [{"rule_id": "ignored", "level": "RED"}],
-            "is_table_alert_totals": True,
-        }
-
-        result = self.factory._resolve_table_alerts(query, None, None)
-
-        assert result == {"columns": ["region"]}
-        assert "alert_filters" in query
-        assert "is_table_alert_totals" in query
-
-    @patch("superset.common.query_context_factory.TableRuleResolver")
-    @patch("superset.common.query_context_factory.is_feature_enabled")
-    def test_resolve_table_alerts_adds_trusted_groups_and_cache_fingerprint(
+    def test_normalize_color_query_discards_retired_inputs_without_mutation(
         self,
-        mock_is_feature_enabled,
-        mock_resolver_class,
-    ):
-        """Enabled references become canonical extras owned by the server."""
-        mock_is_feature_enabled.return_value = True
-        alert_groups = [
-            {
-                "kind": "saved_metric",
-                "key": "gross_revenue",
-                "rules": [
-                    {
-                        "rule_id": "772a548e-72f7-4ac8-a8ff-fdb7465b3ccd",
-                        "operator": "<",
-                        "target_value": "0",
-                    }
-                ],
-            }
-        ]
-        mock_resolver_class.return_value.resolve.return_value = (
-            alert_groups,
-            "rule-fingerprint",
-        )
-        slice_ = Mock(spec=Slice)
-        datasource = Mock()
-        datasource.columns = []
-        datasource.metrics = []
-        references = [
-            {
-                "rule_id": "772a548e-72f7-4ac8-a8ff-fdb7465b3ccd",
-                "level": "RED",
-            }
-        ]
+    ) -> None:
+        """Color state and retired private extras never enter the SQL query."""
         query = {
             "columns": ["region"],
             "metrics": ["gross_revenue"],
-            "alert_filters": references,
+            "row_limit": 20,
+            "table_color_filter": {"version": 2},
+            "alert_filters": [{"rule_id": "ignored", "level": "RED"}],
             "is_table_alert_totals": True,
-            "extras": {"where": ""},
-        }
-
-        result = self.factory._resolve_table_alerts(query, slice_, datasource)
-
-        mock_resolver_class.assert_called_once_with(slice_, datasource)
-        mock_resolver_class.return_value.resolve.assert_called_once_with(
-            references=references,
-            query={
-                "columns": ["region"],
-                "metrics": ["gross_revenue"],
-                "extras": {"where": ""},
+            "extras": {
+                "where": "region IS NOT NULL",
+                "having": "SUM(amount) > 0",
+                "__table_alert_filters": [{"operator": ">", "target": 0}],
+                "__table_alert_fingerprint": "retired",
+                "__table_color_styles": "client-forged",
             },
-        )
-        assert result["extras"] == {
-            "where": "",
-            ALERT_FILTERS_EXTRA_KEY: alert_groups,
-            ALERT_FILTER_FINGERPRINT_EXTRA_KEY: "rule-fingerprint",
-            ALERT_TOTALS_EXTRA_KEY: True,
         }
-        assert query["alert_filters"] == references
-        assert query["is_table_alert_totals"] is True
+        original = copy.deepcopy(query)
+
+        result = self.factory._normalize_color_query(query)
+
+        assert result == {
+            "columns": ["region"],
+            "metrics": ["gross_revenue"],
+            "row_limit": 20,
+            "extras": {
+                "where": "region IS NOT NULL",
+                "having": "SUM(amount) > 0",
+            },
+        }
+        assert query == original
+
+    @patch("superset.common.query_context_factory.is_feature_enabled")
+    def test_color_request_disabled_ignores_even_invalid_client_fields(
+        self, mock_is_feature_enabled: Mock
+    ) -> None:
+        """Flag-off requests retain ordinary query behavior without color parsing."""
+        mock_is_feature_enabled.return_value = False
+        queries = [{"table_color_filter": {"version": 99}, "alert_filters": "old"}]
+        original = copy.deepcopy(queries)
+        assert self.factory._get_table_color_request(queries) is None
+        assert queries == original
+
+    @patch(
+        "superset.common.query_context_factory.is_feature_enabled", return_value=True
+    )
+    def test_color_request_normalizes_three_colors_and_leaves_input_unchanged(
+        self, mock_is_feature_enabled: Mock
+    ) -> None:
+        """Selections are canonical context state, not trusted SQL predicates."""
+        queries = [
+            {
+                "table_color_filter": {
+                    "version": 2,
+                    "selections": [
+                        {"column": "gross_revenue", "colors": ["RED", "GREEN"]},
+                        {"column": "gross_revenue", "colors": ["YELLOW"]},
+                    ],
+                }
+            },
+            {"is_rowcount": True},
+        ]
+        original = copy.deepcopy(queries)
+        result = self.factory._get_table_color_request(queries)
+        mock_is_feature_enabled.assert_called_once_with("TABLE_ALERT_FILTERS")
+        assert result == {
+            "version": 2,
+            "theme_mode": "default",
+            "selections": [
+                {"column": "gross_revenue", "colors": ["GREEN", "YELLOW", "RED"]}
+            ],
+        }
+        assert queries == original
+
+    @pytest.mark.parametrize(
+        "queries",
+        [
+            [{}, {"table_color_filter": {"version": 2}}],
+            [
+                {"table_color_filter": {"version": 2}},
+                {"table_color_filter": {"version": 1}},
+            ],
+            [{"table_color_filter": {"version": 2}, "alert_filters": []}],
+            [{"table_color_filter": {"version": 2}}, {"is_table_alert_totals": False}],
+        ],
+    )
+    @patch(
+        "superset.common.query_context_factory.is_feature_enabled", return_value=True
+    )
+    def test_color_request_rejects_conflicting_or_mixed_protocols(
+        self, mock_is_feature_enabled: Mock, queries: list[dict[str, Any]]
+    ) -> None:
+        """Mixed engines and secondary-query-only state are explicit errors."""
+        with pytest.raises(TableColorFilterError, match="TABLE_COLOR_FILTER_INVALID"):
+            self.factory._get_table_color_request(queries)
+        mock_is_feature_enabled.assert_called_once_with("TABLE_ALERT_FILTERS")
+
+    @patch(
+        "superset.common.query_context_factory.is_feature_enabled", return_value=True
+    )
+    def test_color_request_direct_call_is_validated_and_legacy_only_is_ignored(
+        self, mock_is_feature_enabled: Mock
+    ) -> None:
+        """Non-REST callers cannot bypass the versioned schema."""
+        with pytest.raises(ValidationError):
+            self.factory._get_table_color_request(
+                [{"table_color_filter": {"version": 2, "threshold": 1}}]
+            )
+        assert (
+            self.factory._get_table_color_request(
+                [{"alert_filters": [{"level": "RED"}], "is_table_alert_totals": True}]
+            )
+            is None
+        )
+        assert self.factory._get_table_color_request([]) is None
+        mock_is_feature_enabled.assert_called_with("TABLE_ALERT_FILTERS")
+
+    @patch(
+        "superset.common.query_context_factory.is_feature_enabled", return_value=True
+    )
+    def test_color_request_is_context_metadata_without_changing_query_construction(
+        self, mock_is_feature_enabled: Mock
+    ) -> None:
+        """The source SQL objects and immutable caller payload remain unaffected."""
+        request = {
+            "version": 2,
+            "selections": [{"column": "profit", "colors": ["GREEN"]}],
+        }
+        queries = [
+            {
+                "columns": ["region"],
+                "metrics": ["profit"],
+                "table_color_filter": request,
+            },
+            {"is_rowcount": True, "columns": ["region"]},
+        ]
+        original = copy.deepcopy(queries)
+        query_objects = [Mock(spec=QueryObject), Mock(spec=QueryObject)]
+        datasource = Mock(id=7)
+        with (
+            patch.object(self.factory, "_convert_to_model", return_value=datasource),
+            patch.object(
+                self.factory._query_object_factory, "create", side_effect=query_objects
+            ) as create,
+            patch.object(
+                self.factory,
+                "_process_query_object",
+                side_effect=lambda _source, _form, query: query,
+            ),
+        ):
+            result = self.factory.create(
+                datasource={"id": 7, "type": "table"}, queries=queries
+            )
+        assert result.queries == query_objects
+        mock_is_feature_enabled.assert_any_call("TABLE_ALERT_FILTERS")
+        assert result.table_color_filter == {**request, "theme_mode": "default"}
+        assert create.call_args_list[0].kwargs == {
+            "datasource": {"id": 7, "type": "table"},
+            "server_pagination": False,
+            "columns": ["region"],
+            "metrics": ["profit"],
+        }
+        assert "table_color_filter" not in create.call_args_list[1].kwargs
+        assert (
+            result.cache_values["queries"][0]["table_color_filter"]
+            == result.table_color_filter
+        )
+        assert "table_color_filter" not in result.cache_values["queries"][1]
+        assert queries == original
 
     def test_extract_tooltip_columns_dict_items(self):
         """Test _extract_tooltip_columns with dict items in tooltip_contents"""

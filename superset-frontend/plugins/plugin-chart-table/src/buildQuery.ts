@@ -24,6 +24,7 @@ import {
   QueryFormOrderBy,
   QueryMode,
   QueryObject,
+  TableColorFilterRequest,
   buildQueryContext,
   ensureIsArray,
   getMetricLabel,
@@ -37,12 +38,8 @@ import {
   timeCompareOperator,
 } from '@superset-ui/chart-controls';
 import { isEmpty } from 'lodash';
-import {
-  TableAlertFilterSelection,
-  TableChartFormData,
-  TableChartOwnState,
-} from './types';
-import { updateTableOwnState } from './DataTable/utils/externalAPIs';
+import { TableChartFormData, TableChartOwnState } from './types';
+import { getTableColorFilterTargets } from './utils/resolveTableCellStyle';
 
 /**
  * Infer query mode from form data. If `all_columns` is set, then raw records mode,
@@ -223,25 +220,31 @@ const buildQuery: BuildQuery<TableChartFormData> = (
 
     const moreProps: Partial<QueryObject> = {};
     const ownState = (options?.ownState ?? {}) as TableChartOwnState;
-    const alertFilters = isFeatureEnabled(FeatureFlag.TableAlertFilters)
-      ? Array.from(
-          new Map(
-            (Array.isArray(ownState.alertFilters) ? ownState.alertFilters : [])
-              .filter(
-                (reference): reference is TableAlertFilterSelection =>
-                  typeof reference?.ruleId === 'string' &&
-                  ['RED', 'YELLOW', 'GREEN'].includes(reference.level),
-              )
-              .map(reference => [
-                `${reference.ruleId}:${reference.level}`,
-                {
-                  rule_id: reference.ruleId,
-                  level: reference.level,
-                },
-              ]),
-          ).values(),
-        ).slice(0, 50)
-      : [];
+    const hasColorFilter =
+      isFeatureEnabled(FeatureFlag.TableAlertFilters) &&
+      !['query', 'samples'].includes(String(formData.result_type)) &&
+      Array.isArray(formData.conditional_formatting) &&
+      formData.conditional_formatting.some(
+        (rule: { filterable?: boolean } | null) => rule?.filterable === true,
+      );
+    const colorState = ownState.alertFilter;
+    const colorTargets = hasColorFilter
+      ? getTableColorFilterTargets(formData)
+      : new Set<string>();
+    const colorFilter: TableColorFilterRequest | undefined = hasColorFilter
+      ? {
+          version: 2,
+          selections:
+            colorState?.version === 2
+              ? colorState.selections.filter(selection =>
+                  colorTargets.has(selection.column),
+                )
+              : [],
+          ...(colorState?.snapshotId
+            ? { snapshot_id: colorState.snapshotId }
+            : {}),
+        }
+      : undefined;
     // Build Query flag to check if its for either download as csv, excel or json
     const isDownloadQuery =
       ['csv', 'xlsx'].includes(formData?.result_format || '') ||
@@ -279,7 +282,7 @@ const buildQuery: BuildQuery<TableChartFormData> = (
       metrics,
       post_processing: postProcessing,
       time_offsets: timeOffsets,
-      ...(alertFilters.length ? { alert_filters: alertFilters } : {}),
+      ...(colorFilter ? { table_color_filter: colorFilter } : {}),
       ...moreProps,
     };
 
@@ -290,12 +293,6 @@ const buildQuery: BuildQuery<TableChartFormData> = (
         JSON.stringify(queryObject.filters)
     ) {
       queryObject = { ...queryObject, row_offset: 0 };
-      const modifiedOwnState = {
-        ...options?.ownState,
-        currentPage: 0,
-        pageSize: queryObject.row_limit ?? 0,
-      };
-      updateTableOwnState(options?.hooks?.setDataMask, modifiedOwnState);
     }
 
     if (formData.server_pagination) {
@@ -321,6 +318,8 @@ const buildQuery: BuildQuery<TableChartFormData> = (
     });
 
     const extraQueries: QueryObject[] = [];
+    const auxiliaryQuery = { ...queryObject };
+    delete auxiliaryQuery.table_color_filter;
 
     const calculationMode = formData.percent_metric_calculation || 'row_limit';
 
@@ -330,15 +329,14 @@ const buildQuery: BuildQuery<TableChartFormData> = (
       percentMetrics.length > 0
     ) {
       extraQueries.push({
-        ...queryObject,
-        columns: alertFilters.length ? queryObject.columns : [],
-        metrics: alertFilters.length ? queryObject.metrics : percentMetrics,
+        ...auxiliaryQuery,
+        columns: [],
+        metrics: percentMetrics,
         post_processing: [],
         row_limit: 0,
         row_offset: 0,
         orderby: [],
         is_timeseries: false,
-        ...(alertFilters.length ? { is_table_alert_totals: true } : {}),
       });
     }
 
@@ -348,14 +346,13 @@ const buildQuery: BuildQuery<TableChartFormData> = (
       queryMode === QueryMode.Aggregate
     ) {
       extraQueries.push({
-        ...queryObject,
-        columns: alertFilters.length ? queryObject.columns : [],
+        ...auxiliaryQuery,
+        columns: [],
         row_limit: 0,
         row_offset: 0,
         post_processing: [],
         order_desc: undefined,
         orderby: undefined,
-        ...(alertFilters.length ? { is_table_alert_totals: true } : {}),
       });
     }
 
@@ -373,7 +370,7 @@ const buildQuery: BuildQuery<TableChartFormData> = (
       return [
         { ...queryObject },
         {
-          ...queryObject,
+          ...auxiliaryQuery,
           time_offsets: [],
           row_limit: Number(formData?.row_limit ?? 0),
           row_offset: 0,

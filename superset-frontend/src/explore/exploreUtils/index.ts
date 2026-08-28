@@ -46,6 +46,10 @@ import {
 } from 'src/explore/constants';
 import { DashboardStandaloneMode } from 'src/dashboard/util/constants';
 import { Slice } from 'src/types/Chart';
+import {
+  prepareTableColorFilterRequest,
+  TableColorExportView,
+} from 'src/components/Chart/tableColorFilterRequest';
 
 // Type definitions
 export type EndpointType =
@@ -87,6 +91,9 @@ interface BuildV1ChartDataPayloadParams {
   resultType?: string;
   setDataMask?: SetDataMaskHook;
   ownState?: JsonObject;
+  tableColorThemeMode?: 'default' | 'dark';
+  prepareColorFilter?: boolean;
+  currentView?: TableColorExportView;
 }
 
 interface ExportChartParams {
@@ -95,6 +102,7 @@ interface ExportChartParams {
   resultType?: string;
   force?: boolean;
   ownState?: JsonObject;
+  currentView?: TableColorExportView;
   onStartStreamingExport?:
     | ((params: {
         url: string | null;
@@ -313,6 +321,9 @@ export const buildV1ChartDataPayload = async ({
   resultType,
   setDataMask,
   ownState,
+  tableColorThemeMode,
+  prepareColorFilter = false,
+  currentView,
 }: BuildV1ChartDataPayloadParams): Promise<
   ReturnType<typeof buildQueryContext>
 > => {
@@ -350,6 +361,20 @@ export const buildV1ChartDataPayload = async ({
   ) {
     queryContext.result_format_options = { styled: true };
   }
+  if (prepareColorFilter) {
+    await prepareTableColorFilterRequest(
+      queryContext,
+      ownState,
+      tableColorThemeMode,
+      currentView,
+    );
+  } else {
+    // Builders are also used to persist query_context; never store a user
+    // snapshot or draft token in a saved Slice.
+    queryContext.queries?.forEach(query => {
+      delete query.table_color_filter;
+    });
+  }
   return queryContext;
 };
 
@@ -368,6 +393,7 @@ export const exportChart = async ({
   resultType = 'full',
   force = false,
   ownState = {},
+  currentView,
   onStartStreamingExport = null,
 }: ExportChartParams): Promise<void> => {
   let url: string | null;
@@ -386,11 +412,13 @@ export const exportChart = async ({
   } else {
     url = ensureAppRoot('/api/v1/chart/data');
     payload = await buildV1ChartDataPayload({
+      prepareColorFilter: true,
       formData,
       force,
       resultFormat,
       resultType,
       ownState,
+      currentView,
     });
   }
 

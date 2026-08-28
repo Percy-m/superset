@@ -489,7 +489,6 @@ const getPageSize = (
   return numRecords * numColumns > 5000 ? 200 : 0;
 };
 
-const defaultServerPaginationData = {};
 const defaultColorFormatters = [] as ColorFormatters;
 const transformProps = (
   chartProps: TableChartProps,
@@ -718,18 +717,28 @@ const transformProps = (
     [baseQuery, totalQuery] = queriesData;
     rowCount = baseQuery?.rowcount ?? 0;
   }
+  const tableColorMetadata = isFeatureEnabled(FeatureFlag.TableAlertFilters)
+    ? baseQuery?.table_color_metadata
+    : undefined;
+  if (tableColorMetadata?.status === 'ready') {
+    rowCount = tableColorMetadata.filtered_rowcount;
+  }
   const data = processDataRecords(baseQuery?.data, columns);
   const comparisonData = processComparisonDataRecords(
     baseQuery?.data,
     columns,
     comparisonSuffix,
   );
-  const totals =
+  const originalTotals =
     showTotals && queryMode === QueryMode.Aggregate
       ? isUsingTimeComparison
         ? processComparisonTotals(comparisonSuffix, totalQuery?.data)
         : totalQuery?.data[0]
       : undefined;
+  const totals =
+    tableColorMetadata?.status === 'ready' && showTotals
+      ? (tableColorMetadata.totals ?? originalTotals)
+      : originalTotals;
 
   const passedData = isUsingTimeComparison ? comparisonData || [] : data;
   const passedColumns = isUsingTimeComparison ? comparisonColumns : columns;
@@ -780,9 +789,7 @@ const transformProps = (
     serverPagination,
     metrics,
     percentMetrics,
-    serverPaginationData: serverPagination
-      ? serverPaginationData
-      : defaultServerPaginationData,
+    serverPaginationData: tableOwnState,
     setDataMask,
     alignPositiveNegative,
     colorPositiveNegative,
@@ -800,7 +807,7 @@ const transformProps = (
     onChangeFilter,
     columnColorFormatters,
     alertFormattingRules: conditionalFormatting,
-    alertFilters: tableOwnState.alertFilters ?? [],
+    tableColorMetadata,
     tableOwnState,
     tableAlertFiltersEnabled: isFeatureEnabled(FeatureFlag.TableAlertFilters),
     timeGrain,

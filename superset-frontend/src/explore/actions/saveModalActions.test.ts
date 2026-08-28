@@ -99,6 +99,33 @@ jest.mock('../exploreUtils', () => ({
 
 beforeEach(() => fetchMock.clearHistory().removeRoutes());
 
+test('saving a classic Table excludes private color runtime state but retains native filters', async () => {
+  const source: QueryFormData = {
+    datasource: '22__table',
+    viz_type: 'table',
+    conditional_formatting: [{ column: 'profit', filterable: true }],
+    extra_form_data: {
+      filters: [{ col: 'region', op: 'IN', val: ['east'] }],
+      alertFilter: {
+        version: 2,
+        snapshotId: 'private-snapshot',
+        selections: [{ column: 'profit', colors: ['GREEN'] }],
+      },
+      alertFilters: [{ ruleId: 'obsolete-rule', level: 'GREEN' }],
+      clientView: { snapshotId: 'private-snapshot', rowIndices: [4, 2] },
+    } as unknown as QueryFormData['extra_form_data'],
+  };
+  const original = JSON.stringify(source);
+  const payload = await getSlicePayload('Color Table', source, [], []);
+  const saved = JSON.parse(payload.params ?? '{}') as QueryFormData;
+  expect(saved.extra_form_data).toEqual({
+    filters: [{ col: 'region', op: 'IN', val: ['east'] }],
+  });
+  expect(saved.conditional_formatting).toEqual(source.conditional_formatting);
+  expect(payload.params).not.toContain('private-snapshot');
+  expect(JSON.stringify(source)).toBe(original);
+});
+
 /**
  * Tests updateSlice action
  */

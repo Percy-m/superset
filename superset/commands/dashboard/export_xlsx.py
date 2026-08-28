@@ -29,7 +29,9 @@ from typing import Any, cast, Mapping, TypedDict
 
 import pandas as pd
 from flask import current_app
+from marshmallow import ValidationError
 
+from superset import is_feature_enabled
 from superset.commands.base import BaseCommand
 from superset.commands.dashboard.exceptions import (
     DashboardXlsxChartFailedError,
@@ -42,6 +44,20 @@ from superset.common.db_query_status import QueryStatus
 from superset.common.query_context import QueryContext
 from superset.common.query_context_factory import QueryContextFactory
 from superset.common.table_alerts import TableRuleResolver
+from superset.common.table_color_context import (
+    dashboard_filter_fingerprint,
+    TableColorContext,
+)
+from superset.common.table_color_schema import (
+    TableColorFilterError,
+    TableColorFilterSchema,
+    TableColorRequest,
+    TableColorSelection,
+)
+from superset.common.table_color_snapshot import (
+    ColorSnapshotBudget,
+    TableColorSnapshotStore,
+)
 from superset.exceptions import SupersetSecurityException
 from superset.models.dashboard import Dashboard
 from superset.models.slice import Slice
@@ -242,8 +258,8 @@ class DashboardFilterStateResolver:
 
     def resolve(  # noqa: C901
         self, chart_id: int
-    ) -> tuple[dict[str, object], list[dict[str, str]]]:
-        """Return effective native/cross filters and target-owned alert references."""
+    ) -> tuple[dict[str, object], list[TableColorSelection]]:
+        """Return native/cross filters and versioned, non-persistent color choices."""
         filters: list[dict[str, object]] = []
         scalar_extra: dict[str, object] = {}
         native_filters = self._metadata.get("native_filter_configuration")
@@ -284,31 +300,30 @@ class DashboardFilterStateResolver:
                         cast(list[dict[str, object]], extra.get("filters", []))
                     )
 
-        alert_filters: list[dict[str, str]] = []
+        color_selections: list[TableColorSelection] = []
         own_state = self._mask(chart_id).get("ownState")
-        references = (
-            own_state.get("alertFilters") if isinstance(own_state, dict) else None
+        candidate = (
+            own_state.get("alertFilter") if isinstance(own_state, dict) else None
         )
-        if isinstance(references, list):
-            for reference in references[:50]:
-                if (
-                    isinstance(reference, dict)
-                    and isinstance(reference.get("ruleId"), str)
-                    and reference.get("level") in {"RED", "YELLOW", "GREEN"}
-                ):
-                    alert_filters.append(
-                        {
-                            "rule_id": reference["ruleId"],
-                            "level": cast(str, reference["level"]),
-                        }
-                    )
-                else:
-                    self.dropped_state_count += 1
-            self.dropped_state_count += max(0, len(references) - 50)
+        if isinstance(candidate, dict) and candidate.get("version") == 2:
+            try:
+                choices = TableColorFilterSchema().load(
+                    {
+                        "version": 2,
+                        "selections": candidate.get("selections", []),
+                    }
+                )
+                color_selections = choices["selections"]
+            except ValidationError:
+                self.dropped_state_count += 1
+        elif candidate is not None:
+            self.dropped_state_count += 1
+        if isinstance(own_state, dict) and "alertFilters" in own_state:
+            self.dropped_state_count += 1
 
         return (
             {**scalar_extra, **({"filters": filters} if filters else {})},
-            alert_filters,
+            color_selections,
         )
 
 
@@ -320,10 +335,12 @@ class ExportDashboardXlsxCommand(BaseCommand):
         dashboard: Dashboard,
         tab_ids: list[str],
         data_mask: object | None = None,
+        color_snapshots: dict[str, dict[str, str]] | None = None,
     ) -> None:
         self._dashboard = dashboard
         self._tab_ids = tab_ids
         self._data_mask = data_mask or {}
+        self._color_snapshots = color_snapshots or {}
 
     def _collect_work_items(  # noqa: C901
         self,
@@ -450,7 +467,7 @@ class ExportDashboardXlsxCommand(BaseCommand):
         self,
         chart: Slice,
         extra_form_data: Mapping[str, object],
-        alert_filters: list[dict[str, str]],
+        color_selections: list[TableColorSelection],
     ) -> QueryContext:
         try:
             saved_context = json.loads(chart.query_context or "")
@@ -468,8 +485,10 @@ class ExportDashboardXlsxCommand(BaseCommand):
         ):
             raise DashboardXlsxChartFailedError()
 
-        form_data = chart.form_data
-        main_query = copy.deepcopy(saved_queries[0])
+        form_data = {**chart.form_data, "dashboardId": self._dashboard.id}
+        main_query = QueryContextFactory._normalize_color_query(
+            copy.deepcopy(saved_queries[0])
+        )  # pylint: disable=protected-access
         main_query["row_limit"] = self._row_limit(form_data)
         main_query["row_offset"] = 0
         main_query.pop("is_rowcount", None)
@@ -486,26 +505,19 @@ class ExportDashboardXlsxCommand(BaseCommand):
             extras = dict(main_query.get("extras") or {})
             extras["time_grain_sqla"] = extra_form_data["time_grain_sqla"]
             main_query["extras"] = extras
-        if alert_filters:
-            main_query["alert_filters"] = alert_filters
-
         queries = [main_query]
         metrics = main_query.get("metrics")
         if form_data.get("show_totals") and isinstance(metrics, list) and metrics:
             totals_query = copy.deepcopy(main_query)
-            totals_query["columns"] = (
-                copy.deepcopy(main_query.get("columns") or []) if alert_filters else []
-            )
+            totals_query["columns"] = []
             totals_query["row_limit"] = 0
             totals_query["row_offset"] = 0
             totals_query["post_processing"] = []
             totals_query["orderby"] = []
             totals_query.pop("order_desc", None)
-            if alert_filters:
-                totals_query["is_table_alert_totals"] = True
             queries.append(totals_query)
 
-        return QueryContextFactory().create(
+        query_context = QueryContextFactory().create(
             current_slice=chart,
             datasource=cast(DatasourceDict, datasource),
             queries=queries,
@@ -514,12 +526,98 @@ class ExportDashboardXlsxCommand(BaseCommand):
             result_format=ChartDataResultFormat.JSON,
             force=True,
         )
+        return self._with_color_snapshot(
+            query_context, chart.id, extra_form_data, color_selections
+        )
+
+    def _with_color_snapshot(
+        self,
+        query_context: QueryContext,
+        chart_id: int,
+        extra_form_data: Mapping[str, object],
+        color_selections: list[TableColorSelection],
+    ) -> QueryContext:
+        """Ordinary exports stay on their existing path when no snapshot is needed."""
+        if not is_feature_enabled("TABLE_ALERT_FILTERS"):
+            return query_context
+        reference = self._color_snapshots.get(str(chart_id))
+        if reference is None:
+            if color_selections:
+                raise TableColorFilterError(
+                    "TABLE_COLOR_FILTER_SNAPSHOT_EXPIRED",
+                    "Load the color-filtered Table before exporting it.",
+                    410,
+                )
+            return query_context
+        return self._snapshot_context(
+            query_context, reference, extra_form_data, color_selections
+        )
+
+    def _snapshot_context(
+        self,
+        query_context: QueryContext,
+        reference: dict[str, str],
+        extra_form_data: Mapping[str, object],
+        selections: list[TableColorSelection],
+    ) -> QueryContext:
+        """Use an owned snapshot's query, but recheck saved rules, filters and RLS."""
+        request: TableColorRequest = {
+            "version": 2,
+            "selections": selections,
+            "snapshot_id": reference["snapshot_id"],
+        }
+        trusted = TableColorContext.resolve(query_context, request)
+        snapshot = TableColorSnapshotStore(ColorSnapshotBudget.from_config()).load(
+            reference["snapshot_id"], trusted.owner
+        )
+        chart = query_context.slice_
+        if (
+            chart is None
+            or snapshot.get("saved_chart_id") != chart.id
+            or snapshot.get("dashboard_id") != self._dashboard.id
+            or snapshot["generation"] != reference["generation"]
+            or snapshot.get("dashboard_filters")
+            != dashboard_filter_fingerprint(dict(extra_form_data))
+        ):
+            raise TableColorFilterError(
+                "TABLE_COLOR_FILTER_CONTEXT_CHANGED",
+                "The dashboard or color-filter context changed. Reload the Table.",
+                409,
+            )
+        request["theme_mode"] = snapshot.get("theme_mode", "default")
+        queries = [
+            QueryContextFactory._normalize_color_query(copy.deepcopy(query))  # pylint: disable=protected-access
+            for query in snapshot["source_context_queries"]
+        ]
+        queries[0]["table_color_filter"] = request
+        queries[0]["row_offset"] = 0
+        return QueryContextFactory().create(
+            current_slice=chart,
+            datasource={"id": query_context.datasource.id, "type": "table"},
+            queries=queries,
+            form_data={
+                **chart.form_data,
+                "dashboardId": self._dashboard.id,
+                "extra_form_data": dict(extra_form_data),
+            },
+            result_type=ChartDataResultType.RESULTS,
+            result_format=ChartDataResultFormat.JSON,
+            force=False,
+        )
 
     @staticmethod
     def _execute_chart(
         query_context: QueryContext,
     ) -> tuple[pd.DataFrame, list[GenericDataType], dict[str, object] | None]:
         query_context.raise_for_access()
+        if query_context.table_color_filter is not None:
+            primary = query_context.get_payload()["queries"][0]
+            metadata = primary["table_color_metadata"]
+            dataframe = pd.DataFrame(
+                primary["data"], columns=primary["colnames"], dtype=object
+            )
+            dataframe.attrs["table_color_styles"] = metadata["styles"]
+            return dataframe, primary["coltypes"], metadata.get("totals")
         main_payload = query_context.get_df_payload(query_context.queries[0])
         if main_payload.get("status") == QueryStatus.FAILED:
             raise DashboardXlsxChartFailedError()
@@ -558,11 +656,11 @@ class ExportDashboardXlsxCommand(BaseCommand):
                 if chart_id is None:
                     raise DashboardXlsxChartFailedError()
                 active_chart_id = chart_id
-                extra_form_data, alert_filters = state_resolver.resolve(chart_id)
+                extra_form_data, color_selections = state_resolver.resolve(chart_id)
                 query_context = self._query_context(
                     work_item.chart,
                     extra_form_data,
-                    alert_filters,
+                    color_selections,
                 )
                 dataframe, column_types, totals = self._execute_chart(query_context)
                 rules = TableRuleResolver(
@@ -604,7 +702,7 @@ class ExportDashboardXlsxCommand(BaseCommand):
                     else f"dashboard_{self._dashboard.id}.xlsx"
                 ),
             )
-        except SupersetSecurityException:
+        except (SupersetSecurityException, TableColorFilterError):
             raise
         except (
             DashboardXlsxChartFailedError,

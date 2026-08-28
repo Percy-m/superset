@@ -30,6 +30,7 @@ from superset.utils.styled_excel import (
     resolve_sheet_name,
     StyledExcelError,
     XLSX_DATA_LIMIT_MESSAGE,
+    XLSX_STYLE_ALIGNMENT_MESSAGE,
 )
 
 
@@ -161,3 +162,116 @@ def test_styled_excel_applies_temporal_and_saved_number_formats() -> None:
 
     assert worksheet["A2"].number_format == "yyyy-mm-dd hh:mm:ss"
     assert worksheet["B2"].number_format == "0.0%"
+
+
+def test_styled_excel_uses_frozen_paints_without_reapplying_rules() -> None:
+    """The export keeps source-page paints even if only one matching row remains."""
+    dataframe = pd.DataFrame({"profit": [10], "percentage": [0.125]})
+    dataframe.attrs["table_color_styles"] = [
+        {
+            "profit": {
+                "backgroundColor": "rgba(150,0,0,0.2)",
+                "textColor": "rgb(82, 196, 26)",
+                "colors": ["GREEN", "RED"],
+            },
+            "percentage": {
+                "cellBar": {
+                    "color": "#faad1499",
+                    "width": 25,
+                    "offset": 0,
+                    "min": 0,
+                    "max": 0.5,
+                },
+                "colors": ["YELLOW"],
+            },
+        }
+    ]
+    conflicting_rules = [
+        ResolvedTableStyleRule(
+            source_column="profit",
+            target_column="profit",
+            dimension="background",
+            color="#1677FF",
+            operator="None",
+            use_gradient=False,
+        )
+    ]
+    payload = dataframe_to_styled_xlsx(
+        dataframe,
+        conflicting_rules,
+        sheet_name="Frozen",
+    )
+    worksheet = load_workbook(BytesIO(payload))["Frozen"]
+    assert worksheet["A2"].value == 10
+    assert worksheet["A2"].fill.fgColor.rgb == "FFEACCCC"
+    assert worksheet["A2"].font.color.rgb == "FF52C41A"
+    assert worksheet["B2"].value == 0.125
+    with ZipFile(BytesIO(payload)) as workbook:
+        xml = workbook.read("xl/worksheets/sheet1.xml").decode()
+    assert '<cfvo type="num" val="0.5"/>' in xml
+    assert 'rgb="FFFAAD14"' in xml
+    assert 'negativeBarColorSameAsPositive="1"' in xml
+
+
+@pytest.mark.parametrize(
+    "styles",
+    [
+        [],
+        [{"renamed": {"colors": []}}],
+        [{"value": {"colors": ["BLUE"]}}],
+        [{"value": {"colors": [], "textColor": None}}],
+        [
+            {
+                "value": {
+                    "colors": [],
+                    "cellBar": {
+                        "color": "#00ff00",
+                        "width": 0,
+                        "offset": 0,
+                        "min": 0,
+                        "max": 1,
+                    },
+                }
+            }
+        ],
+    ],
+)
+def test_styled_excel_rejects_stale_snapshot_style_alignment(styles: object) -> None:
+    """Frame transformations must not silently attach another row/column's paint."""
+    dataframe = pd.DataFrame({"value": [1]})
+    dataframe.attrs["table_color_styles"] = styles
+    with pytest.raises(StyledExcelError, match=XLSX_STYLE_ALIGNMENT_MESSAGE):
+        dataframe_to_styled_xlsx(dataframe, [], sheet_name="Stale")
+
+
+def test_frozen_styles_keep_formula_and_long_integer_safety() -> None:
+    """Snapshot styling does not bypass the existing safe value writer."""
+    dataframe = pd.DataFrame({"value": [18446744073709551615, "=1+1"]})
+    dataframe.attrs["table_color_styles"] = [
+        {"value": {"colors": ["GREEN"], "backgroundColor": "#5ac189"}},
+        {"value": {"colors": ["RED"], "backgroundColor": "#e04355"}},
+    ]
+    worksheet = load_workbook(
+        BytesIO(dataframe_to_styled_xlsx(dataframe, [], sheet_name="Safe"))
+    )["Safe"]
+    assert worksheet["A2"].value == "18446744073709551615"
+    assert worksheet["A2"].data_type == "s"
+    assert worksheet["A3"].value == "'=1+1"
+
+
+@pytest.mark.parametrize(
+    "color,expected",
+    [("green", "FF008000"), ("hsl(120, 100%, 50%)", "FF00FF00")],
+)
+def test_frozen_styles_preserve_named_and_hsl_theme_colors(
+    color: str, expected: str
+) -> None:
+    """A trusted theme need not express semantic base colors as hex strings."""
+    dataframe = pd.DataFrame({"value": [1]})
+    dataframe.attrs["table_color_styles"] = [
+        {"value": {"colors": ["GREEN"], "backgroundColor": color}}
+    ]
+    sheet = load_workbook(
+        BytesIO(dataframe_to_styled_xlsx(dataframe, [], sheet_name="Theme"))
+    )["Theme"]
+    assert sheet["A2"].fill.fgColor.rgb == expected

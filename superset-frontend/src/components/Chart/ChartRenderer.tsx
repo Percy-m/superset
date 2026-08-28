@@ -34,6 +34,7 @@ import {
   AgGridChartState,
   ContextMenuFilters,
   DataRecordFilters,
+  TableColorMetadata,
 } from '@superset-ui/core';
 import { logging } from '@apache-superset/core/utils';
 import { t } from '@apache-superset/core/translation';
@@ -424,7 +425,14 @@ class ChartRenderer extends Component<ChartRendererProps, ChartRendererState> {
     }
 
     if (chartStatus === 'loading') {
-      if (!this.props.suppressLoadingSpinner || !hasValidPreviousData) {
+      const keepColorView =
+        this.props.vizType === VizType.Table &&
+        isFeatureEnabled(FeatureFlag.TableAlertFilters) &&
+        Boolean(this.props.queriesResponse?.[0]?.table_color_metadata);
+      if (
+        (!this.props.suppressLoadingSpinner && !keepColorView) ||
+        !hasValidPreviousData
+      ) {
         return null;
       }
     }
@@ -514,9 +522,16 @@ class ChartRenderer extends Component<ChartRendererProps, ChartRendererState> {
       Object.keys(ownState.agGridFilterModel).length > 0;
 
     const currentFormDataExtended = currentFormData as JsonObject;
+    const colorMetadata = this.props.queriesResponse?.[0]
+      ?.table_color_metadata as TableColorMetadata | undefined;
+    const hasColorSnapshot =
+      vizType === VizType.Table &&
+      isFeatureEnabled(FeatureFlag.TableAlertFilters) &&
+      colorMetadata?.status === 'ready';
     const bypassNoResult = !(
-      currentFormDataExtended?.server_pagination &&
-      (hasSearchText || hasAgGridFilters)
+      hasColorSnapshot ||
+      (currentFormDataExtended?.server_pagination &&
+        (hasSearchText || hasAgGridFilters))
     );
 
     return (

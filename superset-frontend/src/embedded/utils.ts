@@ -142,6 +142,7 @@ export const getChartDataPayloads = async (
       };
 
       const payload = await buildV1ChartDataPayload({
+        prepareColorFilter: true,
         formData: formData as unknown as QueryFormData,
         resultFormat: 'json',
         resultType: 'results',

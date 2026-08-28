@@ -29,6 +29,70 @@ export interface DataRecord {
   [key: string]: DataRecordValue;
 }
 
+/** Colors derived from the final visible conditional formatting, not rule levels. */
+export type TablePaintColor = 'GREEN' | 'YELLOW' | 'RED';
+
+export interface TableCellPaint {
+  backgroundColor?: string;
+  /** Explicit formatter text color; readable contrast is resolved by the renderer. */
+  textColor?: string;
+  cellBar?: {
+    color: string;
+    width: number;
+    offset: number;
+    min: number;
+    max: number;
+  };
+  arrow?: { color: string; symbol: string };
+  colors: TablePaintColor[];
+}
+
+export interface ColumnFilterCapability {
+  enabled: boolean;
+  supported: boolean;
+  reason?: { code: string; message: string };
+}
+
+export interface TableColorSelection {
+  column: string;
+  colors: TablePaintColor[];
+}
+
+/** Runtime state; snapshot references must not be persisted in a permalink. */
+export interface TableColorFilterState {
+  version: 2;
+  selections: TableColorSelection[];
+  snapshotId?: string;
+  generation?: string;
+}
+
+export type TableColorMetadata =
+  | {
+      status: 'ready';
+      snapshot_id: string;
+      generation: string;
+      baseline_rowcount: number;
+      filtered_rowcount: number;
+      source_page_size: number;
+      row_offset?: number;
+      /** Global snapshot indices aligned with this response's data/styles. */
+      row_indices?: number[];
+      theme_mode?: 'default' | 'dark';
+      catalog: Record<string, TablePaintColor[]>;
+      capabilities: Record<string, ColumnFilterCapability>;
+      styles: Record<string, TableCellPaint>[];
+      expires_in: number;
+      selections?: TableColorSelection[];
+      totals?: DataRecord;
+      /** Client-only notice when retaining the last successful response. */
+      request_error?: string;
+    }
+  | {
+      status: 'unavailable';
+      capabilities: Record<string, ColumnFilterCapability>;
+      reason: { code: string; message: string };
+    };
+
 /**
  * Queried data for charts. The `queries` field from `POST /chart/data`.
  * See superset/charts/schemas.py for the class of the same name.
@@ -83,6 +147,8 @@ export interface ChartDataResponseResult {
    * or null if multiple currencies are present.
    */
   detected_currency?: string | null;
+  /** Immutable Table coloring context shared by filtering, pagination and export. */
+  table_color_metadata?: TableColorMetadata;
 }
 
 export interface TimeseriesChartDataResponseResult extends ChartDataResponseResult {

@@ -17,6 +17,7 @@
  * under the License.
  */
 import { GenericDataType } from '@apache-superset/core/common';
+import { addTranslation } from '@apache-superset/core/translation';
 import { QueryFormData } from '@superset-ui/core';
 import {
   Dataset,
@@ -63,6 +64,7 @@ const createMockExplore = (
   } as Partial<Dataset> as Dataset,
   controls: {
     time_compare: createMockControlState(timeCompareValue),
+    metrics: createMockControlState(['col1', 'col2']),
   },
   form_data: {
     time_compare: timeCompareValue,
@@ -105,6 +107,7 @@ test('extraColorChoices not included when time comparison is disabled', () => {
   );
 
   expect(result.extraColorChoices).toEqual([]);
+  expect(result.supportsAlertFilter).toBe(true);
   expect(result.columnOptions).toEqual(
     expect.arrayContaining([
       expect.objectContaining({ value: 'col1' }),
@@ -137,6 +140,14 @@ test('extraColorChoices included when time comparison is enabled', () => {
   ]);
   expect(result.columnOptions).not.toEqual(
     expect.arrayContaining([expect.objectContaining({ value: 'col1' })]),
+  );
+  expect(result.columnOptions).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        value: 'Main col1',
+        dataType: GenericDataType.Numeric,
+      }),
+    ]),
   );
 });
 
@@ -205,4 +216,117 @@ test('static extraColorChoices removed from config', () => {
   expect(controlConfig).toBeTruthy();
 
   expect(controlConfig?.extraColorChoices).toBeUndefined();
+});
+
+test('translated comparison labels retain locale-independent result keys', () => {
+  addTranslation('Main', ['主要']);
+  try {
+    const result = findConditionalFormattingControl()!.mapStateToProps!(
+      createMockExplore(['P1D']),
+      createMockControlStateForConditionalFormatting(),
+      createMockChart(),
+    );
+    expect(result.columnOptions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ value: 'Main col1', label: '主要 Column 1' }),
+      ]),
+    );
+    expect(result.allColumns).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ value: 'Main col1', label: '主要 Column 1' }),
+      ]),
+    );
+  } finally {
+    addTranslation('Main', ['Main']);
+  }
+});
+
+test('comparison formatting targets use actual display keys and retain numeric dimensions', () => {
+  const controlConfig = findConditionalFormattingControl();
+  const explore = createMockExplore(['P1D']);
+  explore.controls.metrics = createMockControlState(['col1']);
+  const chart = {
+    chartStatus: 'success',
+    queriesResponse: [
+      {
+        colnames: ['col2', 'region', 'col1', 'col1__P1D'],
+        coltypes: [
+          GenericDataType.Numeric,
+          GenericDataType.String,
+          GenericDataType.Numeric,
+          GenericDataType.Numeric,
+        ],
+      },
+    ],
+  };
+  const result = controlConfig!.mapStateToProps!(
+    explore,
+    createMockControlStateForConditionalFormatting(),
+    chart,
+  );
+
+  expect(
+    result.allColumns.map((column: { value: string }) => column.value),
+  ).toEqual([
+    'ENTIRE_ROW',
+    'col2',
+    'region',
+    'Main col1',
+    '# col1',
+    '△ col1',
+    '% col1',
+  ]);
+  expect(result.columnOptions).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        value: 'col2',
+        dataType: GenericDataType.Numeric,
+      }),
+      expect.objectContaining({
+        value: 'Main col1',
+        dataType: GenericDataType.Numeric,
+      }),
+      expect.objectContaining({
+        value: '△ col1',
+        dataType: GenericDataType.Numeric,
+      }),
+    ]),
+  );
+  expect(result.columnOptions).not.toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ value: 'col1__P1D' }),
+      expect.objectContaining({ value: 'Main col2' }),
+    ]),
+  );
+});
+
+test('percentage-only raw metrics do not become formatter targets', () => {
+  const controlConfig = findConditionalFormattingControl();
+  const explore = createMockExplore(undefined);
+  explore.controls.metrics = createMockControlState([]);
+  explore.controls.percent_metrics = createMockControlState(['col1']);
+  const chart = {
+    chartStatus: 'success',
+    queriesResponse: [
+      {
+        colnames: ['col1', '%col1', 'col2'],
+        coltypes: [
+          GenericDataType.Numeric,
+          GenericDataType.Numeric,
+          GenericDataType.Numeric,
+        ],
+      },
+    ],
+  };
+  const result = controlConfig!.mapStateToProps!(
+    explore,
+    createMockControlStateForConditionalFormatting(),
+    chart,
+  );
+  expect(
+    result.allColumns.map((column: { value: string }) => column.value),
+  ).toEqual(['ENTIRE_ROW', '%col1', 'col2']);
+  expect(
+    result.columnOptions.map((column: { value: string }) => column.value),
+  ).toEqual(['%col1', 'col2']);
 });

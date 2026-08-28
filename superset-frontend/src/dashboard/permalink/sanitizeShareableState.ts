@@ -25,25 +25,12 @@ import {
   type ExtraFormData,
   type FilterState,
   type JsonObject,
+  type TablePaintColor,
 } from '@superset-ui/core';
 import { CHART_TYPE, TAB_TYPE } from 'src/dashboard/util/componentTypes';
+import { getTableColorFilterTargets } from '../../../plugins/plugin-chart-table/src/utils/resolveTableCellStyle';
 
-const alertLevels = new Set(['RED', 'YELLOW', 'GREEN']);
-const numericComparators = new Set([
-  '=',
-  '≠',
-  '<',
-  '>',
-  '≤',
-  '≥',
-  '< x <',
-  '≤ x ≤',
-  '≤ x <',
-  '< x ≤',
-]);
-const rangeComparators = new Set(['< x <', '≤ x ≤', '≤ x <', '< x ≤']);
-const uuid4Pattern =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const tablePaintColors: TablePaintColor[] = ['GREEN', 'YELLOW', 'RED'];
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -136,138 +123,72 @@ const getChartId = (chart: DashboardStateChart): string | undefined => {
   return id === undefined ? undefined : String(Number(id));
 };
 
-const isFiniteNumericTarget = (value: unknown): boolean => {
-  if (typeof value === 'number') {
-    return Number.isFinite(value);
-  }
-  return (
-    typeof value === 'string' &&
-    value.trim().length > 0 &&
-    Number.isFinite(Number(value))
-  );
-};
-
-const getValidAlertRules = (chart: DashboardStateChart) => {
+const getValidColorFilterTargets = (
+  chart: DashboardStateChart,
+): Set<string> => {
   const formData = isRecord(chart.form_data) ? chart.form_data : {};
   const vizType = formData.viz_type ?? chart.viz_type;
   if (vizType !== 'table') {
-    return new Map<string, string>();
+    return new Set();
   }
-
-  const groupby = new Set(
-    (Array.isArray(formData.groupby) ? formData.groupby : []).filter(
-      (item): item is string => typeof item === 'string',
-    ),
-  );
-  const metrics = new Set(
-    (Array.isArray(formData.metrics) ? formData.metrics : []).filter(
-      (item): item is string => typeof item === 'string',
-    ),
-  );
-  const rules = Array.isArray(formData.conditional_formatting)
-    ? formData.conditional_formatting
-    : [];
-  const validRules = new Map<string, string>();
-  const seenRuleIds = new Set<string>();
-  const duplicateRuleIds = new Set<string>();
-
-  rules.forEach(candidate => {
-    if (!isRecord(candidate) || typeof candidate.ruleId !== 'string') {
-      return;
-    }
-    const ruleId = candidate.ruleId.toLowerCase();
-    if (!uuid4Pattern.test(ruleId)) {
-      return;
-    }
-    if (seenRuleIds.has(ruleId)) {
-      duplicateRuleIds.add(ruleId);
-      validRules.delete(ruleId);
-      return;
-    }
-    seenRuleIds.add(ruleId);
-
-    const subject = candidate.subjectRef;
-    if (!isRecord(subject)) {
-      return;
-    }
-    const subjectKind = subject.kind;
-    const subjectKey = subject.key;
-    const subjectIsValid =
-      typeof subjectKey === 'string' &&
-      candidate.column === subjectKey &&
-      ((subjectKind === 'physical_column' && groupby.has(subjectKey)) ||
-        (subjectKind === 'saved_metric' && metrics.has(subjectKey)));
-    const { operator } = candidate;
-    const targetsAreValid = rangeComparators.has(String(operator))
-      ? isFiniteNumericTarget(candidate.targetValueLeft) &&
-        isFiniteNumericTarget(candidate.targetValueRight) &&
-        Number(candidate.targetValueLeft) < Number(candidate.targetValueRight)
-      : isFiniteNumericTarget(candidate.targetValue);
-
-    if (
-      candidate.filterable !== true ||
-      typeof candidate.alertLevel !== 'string' ||
-      !alertLevels.has(candidate.alertLevel) ||
-      typeof operator !== 'string' ||
-      !numericComparators.has(operator) ||
-      !targetsAreValid ||
-      !subjectIsValid ||
-      candidate.useGradient === true ||
-      candidate.objectFormatting === 'CELL_BAR'
-    ) {
-      return;
-    }
-    validRules.set(ruleId, candidate.alertLevel);
-  });
-
-  duplicateRuleIds.forEach(ruleId => validRules.delete(ruleId));
-  return validRules;
+  return getTableColorFilterTargets(formData);
 };
 
-const sanitizeAlertFilters = (
+const sanitizeColorFilter = (
   ownState: UnknownRecord,
-  validRules: Map<string, string>,
+  validTargets: Set<string>,
   dropped: DashboardStateDropCounts,
 ): JsonObject | undefined => {
-  const rawAlertFilters = ownState.alertFilters;
+  const rawColorFilter = ownState.alertFilter;
   dropped.transientChartFields += Object.keys(ownState).filter(
-    key => key !== 'alertFilters',
+    key => key !== 'alertFilter' && key !== 'alertFilters',
   ).length;
-  if (!Array.isArray(rawAlertFilters)) {
-    if (rawAlertFilters !== undefined) {
-      dropped.invalidAlertFilters += 1;
-    }
+  if (ownState.alertFilters !== undefined) {
+    dropped.invalidAlertFilters += Array.isArray(ownState.alertFilters)
+      ? ownState.alertFilters.length
+      : 1;
+  }
+  if (rawColorFilter === undefined) return undefined;
+  if (
+    !isRecord(rawColorFilter) ||
+    rawColorFilter.version !== 2 ||
+    !Array.isArray(rawColorFilter.selections)
+  ) {
+    dropped.invalidAlertFilters += 1;
     return undefined;
   }
-
-  const seenReferences = new Set<string>();
-  const alertFilters: JsonObject[] = [];
-  rawAlertFilters.forEach(reference => {
-    if (!isRecord(reference)) {
-      dropped.invalidAlertFilters += 1;
-      return;
-    }
-    const ruleId =
-      typeof reference.ruleId === 'string'
-        ? reference.ruleId.toLowerCase()
-        : '';
-    const { level } = reference;
-    const referenceKey = `${ruleId}:${String(level)}`;
+  dropped.transientChartFields += Object.keys(rawColorFilter).filter(
+    key => key !== 'version' && key !== 'selections',
+  ).length;
+  const selected = new Map<string, Set<TablePaintColor>>();
+  rawColorFilter.selections.forEach(selection => {
     if (
-      !uuid4Pattern.test(ruleId) ||
-      typeof level !== 'string' ||
-      validRules.get(ruleId) !== level ||
-      seenReferences.has(referenceKey) ||
-      alertFilters.length >= 50
+      !isRecord(selection) ||
+      typeof selection.column !== 'string' ||
+      !validTargets.has(selection.column) ||
+      !Array.isArray(selection.colors) ||
+      selection.colors.length === 0 ||
+      selection.colors.length > 3 ||
+      !selection.colors.every(color => tablePaintColors.includes(color)) ||
+      (!selected.has(selection.column) && selected.size >= 100)
     ) {
       dropped.invalidAlertFilters += 1;
       return;
     }
-    seenReferences.add(referenceKey);
-    alertFilters.push({ ruleId, level });
+    dropped.transientChartFields += Object.keys(selection).filter(
+      key => key !== 'column' && key !== 'colors',
+    ).length;
+    const colors = selected.get(selection.column) ?? new Set<TablePaintColor>();
+    selection.colors.forEach(color => colors.add(color));
+    selected.set(selection.column, colors);
   });
-
-  return alertFilters.length > 0 ? { alertFilters } : undefined;
+  const selections = [...selected].map(([column, colors]) => ({
+    column,
+    colors: tablePaintColors.filter(color => colors.has(color)),
+  }));
+  return selections.length
+    ? { alertFilter: { version: 2, selections } }
+    : undefined;
 };
 
 const copyNativeFilterState = (
@@ -372,12 +293,12 @@ export const sanitizeShareableDashboardState = ({
   const configuredCrossFilterIds = new Set(
     Object.keys(chartConfiguration ?? {}).map(id => String(Number(id))),
   );
-  const chartRules = new Map<string, Map<string, string>>();
+  const chartTargets = new Map<string, Set<string>>();
   const crossFilterChartIds = new Set<string>();
   asValues(charts).forEach(chart => {
     const chartId = getChartId(chart);
     if (chartId && chartIdsInLayout.has(chartId)) {
-      chartRules.set(chartId, getValidAlertRules(chart));
+      chartTargets.set(chartId, getValidColorFilterTargets(chart));
       const formData = isRecord(chart.form_data) ? chart.form_data : {};
       const vizType = formData.viz_type ?? chart.viz_type;
       const supportsCrossFilters =
@@ -421,8 +342,8 @@ export const sanitizeShareableDashboardState = ({
       }
 
       const chartId = String(Number(id));
-      const validRules = chartRules.get(chartId);
-      if (!validRules || !Number.isInteger(Number(id))) {
+      const validTargets = chartTargets.get(chartId);
+      if (!validTargets || !Number.isInteger(Number(id))) {
         dropped.invalidDataMasks += 1;
         return;
       }
@@ -438,9 +359,9 @@ export const sanitizeShareableDashboardState = ({
         dropped.invalidDataMasks += 1;
       }
       if (isRecord(rawMask.ownState)) {
-        sanitizedMask.ownState = sanitizeAlertFilters(
+        sanitizedMask.ownState = sanitizeColorFilter(
           rawMask.ownState,
-          validRules,
+          validTargets,
           dropped,
         );
       } else if (rawMask.ownState !== undefined) {

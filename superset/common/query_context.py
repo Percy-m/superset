@@ -24,6 +24,7 @@ import pandas as pd
 from superset.common.chart_data import ChartDataResultFormat, ChartDataResultType
 from superset.common.query_context_processor import QueryContextProcessor
 from superset.common.query_object import QueryObject
+from superset.common.table_color_schema import TableColorRequest
 from superset.explorables.base import Explorable
 from superset.models.slice import Slice
 from superset.utils.core import GenericDataType
@@ -55,6 +56,7 @@ class QueryContext:
     custom_cache_timeout: int | None
 
     cache_values: dict[str, Any]
+    table_color_filter: TableColorRequest | None
 
     _processor: QueryContextProcessor
 
@@ -73,6 +75,7 @@ class QueryContext:
         force: bool = False,
         custom_cache_timeout: int | None = None,
         cache_values: dict[str, Any],
+        table_color_filter: TableColorRequest | None = None,
     ) -> None:
         self.datasource = datasource
         self.slice_ = slice_
@@ -84,6 +87,7 @@ class QueryContext:
         self.force = force
         self.custom_cache_timeout = custom_cache_timeout
         self.cache_values = cache_values
+        self.table_color_filter = table_color_filter
         self._processor = QueryContextProcessor(self)
 
     def get_data(
